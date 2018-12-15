@@ -3,6 +3,7 @@ name = "iota"
 version = "0.1.0"
 dependencies = [
  "ropey 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rpc 0.1.0",
 ]
 
 [[package]]
@@ -12,6 +13,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "smallvec 0.6.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "rpc"
+version = "0.1.0"
 
 [[package]]
 name = "smallvec"
