@@ -6,4 +6,4 @@ edition = "2018"
 
 [dependencies]
 ropey = "0.9.2"
-rpc = { path = "rpc" }
+serde_json = "1.0.33"
