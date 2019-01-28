@@ -1,6 +1,13 @@
 use std::io::{self, Read, Write};
 use std::process::exit;
 
+// TODO: create objects for editor state, view requests like: MoveCursorUp, etc.
+
+struct EditorState {
+    current_line: u128,
+    current_column: u128,
+}
+
 fn main() {
     read_stdin().unwrap_or_else(|e| {
         eprintln!("{}", e);
@@ -9,7 +16,7 @@ fn main() {
 }
 
 fn read_stdin() -> io::Result<()> {
-    println!("started");
+    println!("starting read loop");
 
     loop {
         let mut buf = String::new();
