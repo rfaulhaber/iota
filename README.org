@@ -1,0 +1,3 @@
+#+title: iota
+
+~iota~ is the working name of a new text editor. Born out of the desire to bring what's useful about Emacs into the 21st century.

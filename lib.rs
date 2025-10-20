@@ -1,3 +1,4 @@
-pub fn add(left: i32, right: i32) -> i32 {
-    left + right
-}
+pub mod buffer;
+pub mod editor;
+pub mod location;
+pub mod terminal;

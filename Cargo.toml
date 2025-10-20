@@ -11,3 +11,7 @@ path = "main.rs"
 path = "lib.rs"
 
 [dependencies]
+anyhow = "1.0.100"
+crossterm = "0.29.0"
+ropey = "1.6.1"
+thiserror = "2.0.17"
