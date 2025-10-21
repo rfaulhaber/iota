@@ -1,7 +1,7 @@
 use crate::{buffer::Buffer, location::Position};
 
 #[derive(Debug)]
-pub enum Command {
+pub enum EditorInput {
     InsertChar(char),
     InsertString(String),
     InsertNewLine,
@@ -16,11 +16,17 @@ pub enum Command {
 
     Save,
     SaveAs(String),
+    OpenFile(String),
 
     MoveUp(usize),
     MoveDown(usize),
     MoveLeft(usize),
     MoveRight(usize),
+
+    NewBuffer,
+    DeleteBuffer,
+    NextBuffer,
+    PreviousBuffer,
 }
 
 #[derive(Debug)]
@@ -37,39 +43,103 @@ impl Editor {
         }
     }
 
-    pub fn execute_command(&mut self, command: Command) {
-        let current_buffer = &mut self.buffers[self.current_buffer];
+    /// Create an editor with a file opened
+    pub fn with_file(path: &str) -> Result<Self, crate::buffer::BufferError> {
+        let buffer = Buffer::from_file(path)?;
+        Ok(Self {
+            buffers: vec![buffer],
+            current_buffer: 0,
+        })
+    }
 
+    pub fn execute_command(&mut self, command: EditorInput) {
         match command {
-            Command::InsertChar(c) => current_buffer.insert_char(c),
-            Command::InsertString(s) => current_buffer.insert_string(&s),
-            Command::DeleteChar => {
-                let _ = current_buffer.delete_char();
+            // Buffer management commands
+            EditorInput::NewBuffer => {
+                self.buffers.push(Buffer::new());
+                self.current_buffer = self.buffers.len() - 1;
             }
-            Command::DeleteRange(_) => todo!(),
-            Command::Undo => todo!(),
-            Command::Redo => todo!(),
-            Command::MoveUp(_) => {
-                let _ = current_buffer.move_up();
+            EditorInput::DeleteBuffer => {
+                // Only delete if there's more than one buffer
+                if self.buffers.len() > 1 {
+                    self.buffers.remove(self.current_buffer);
+                    // Adjust current_buffer index if needed
+                    if self.current_buffer >= self.buffers.len() {
+                        self.current_buffer = self.buffers.len() - 1;
+                    }
+                }
             }
-            Command::MoveDown(_) => {
-                let _ = current_buffer.move_down();
+            EditorInput::NextBuffer => {
+                if !self.buffers.is_empty() {
+                    self.current_buffer = (self.current_buffer + 1) % self.buffers.len();
+                }
             }
-            Command::MoveLeft(_) => {
-                let _ = current_buffer.move_left();
-            }
-            Command::MoveRight(_) => {
-                let _ = current_buffer.move_right();
-            }
-            Command::Backspace => {
-                let _ = current_buffer.move_left();
-                current_buffer.delete_char();
-            }
-            Command::InsertNewLine => {
-                let _ = current_buffer.insert_char('\n');
+            EditorInput::PreviousBuffer => {
+                if !self.buffers.is_empty() {
+                    self.current_buffer = if self.current_buffer == 0 {
+                        self.buffers.len() - 1
+                    } else {
+                        self.current_buffer - 1
+                    };
+                }
             }
 
-            _ => {}
+            // File I/O commands
+            EditorInput::OpenFile(path) => {
+                match Buffer::from_file(&path) {
+                    Ok(buffer) => {
+                        self.buffers.push(buffer);
+                        self.current_buffer = self.buffers.len() - 1;
+                    }
+                    Err(_) => {
+                        // TODO: Handle error - for now just ignore
+                    }
+                }
+            }
+            EditorInput::Save => {
+                let _ = self.buffers[self.current_buffer].save();
+                // TODO: Handle errors
+            }
+            EditorInput::SaveAs(path) => {
+                let _ = self.buffers[self.current_buffer].save_as(&path);
+                // TODO: Handle errors
+            }
+
+            // All other commands operate on the current buffer
+            _ => {
+                let current_buffer = &mut self.buffers[self.current_buffer];
+                match command {
+                    EditorInput::InsertChar(c) => current_buffer.insert_char(c),
+                    EditorInput::InsertString(s) => current_buffer.insert_string(&s),
+                    EditorInput::DeleteChar => {
+                        let _ = current_buffer.delete_char();
+                    }
+                    EditorInput::DeleteRange(_) => todo!(),
+                    EditorInput::Undo => todo!(),
+                    EditorInput::Redo => todo!(),
+                    EditorInput::MoveUp(_) => {
+                        let _ = current_buffer.move_up();
+                    }
+                    EditorInput::MoveDown(_) => {
+                        let _ = current_buffer.move_down();
+                    }
+                    EditorInput::MoveLeft(_) => {
+                        let _ = current_buffer.move_left();
+                    }
+                    EditorInput::MoveRight(_) => {
+                        let _ = current_buffer.move_right();
+                    }
+                    EditorInput::Backspace => {
+                        let _ = current_buffer.move_left();
+                        current_buffer.delete_char();
+                    }
+                    EditorInput::InsertNewLine => {
+                        let _ = current_buffer.insert_char('\n');
+                    }
+
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -83,6 +153,7 @@ impl Editor {
             cursor: buffer.cursor_to_position(),
             viewport_start,
             viewport_height,
+            buffer_text: buffer.to_string(),
         }
     }
 
@@ -120,4 +191,5 @@ pub struct BufferView {
     pub cursor: Position,
     pub viewport_start: usize,
     pub viewport_height: usize,
+    pub buffer_text: String,
 }

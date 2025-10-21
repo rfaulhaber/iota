@@ -1,128 +1,174 @@
-use std::io::stdout;
-
-use crate::editor::{Command, Editor};
+use crate::editor::{Editor, EditorInput};
 use anyhow::Result;
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
-    terminal::{self, ClearType},
+use ratatui::{
+    Frame,
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 #[derive(Debug)]
 pub struct Terminal {
     editor: Editor,
     running: bool,
-    viewport_offset: usize,
-    terminal_size: (u16, u16),
 }
 
 impl Terminal {
     pub fn new(editor: Editor) -> Result<Self> {
-        terminal::enable_raw_mode()?;
-        execute!(stdout(), terminal::EnterAlternateScreen)?;
-
-        let terminal_size = terminal::size()?;
-
         Ok(Self {
             editor,
             running: true,
-            viewport_offset: 0,
-            terminal_size,
         })
     }
 
     pub fn run(&mut self) -> Result<()> {
+        let mut term = ratatui::init();
+
         while self.running {
-            self.draw()?;
+            term.draw(|frame| self.draw(frame))?;
             self.handle_input()?;
         }
 
+        ratatui::restore();
+
         Ok(())
     }
 
-    fn draw(&mut self) -> Result<()> {
-        execute!(std::io::stdout(), terminal::Clear(ClearType::All))?;
+    fn draw(&self, frame: &mut Frame) {
+        let area = frame.area();
 
-        let (width, height) = self.terminal_size;
-        let display_height = height.saturating_sub(2) as usize;
+        // Split the screen into editor area and status line
+        let chunks = Layout::vertical([
+            Constraint::Min(1),      // Editor area
+            Constraint::Length(1),   // Status line
+        ])
+        .split(area);
 
-        // Get the buffer view from the editor
-        let view = self
-            .editor
-            .get_buffer_view(self.viewport_offset, display_height);
+        let editor_area = chunks[0];
+        let status_area = chunks[1];
 
-        // Draw buffer content
-        for (i, line) in view.lines.iter().enumerate() {
-            execute!(stdout(), cursor::MoveTo(0, i as u16))?;
+        // Get editor info and buffer view
+        let info = self.editor.get_info();
 
-            // Truncate line if too long
-            let display_line = if line.len() > width as usize {
-                &line[..width as usize]
-            } else {
-                line
-            };
+        // No borders now, so viewport height is the full editor area
+        let viewport_height = editor_area.height as usize;
 
-            execute!(stdout(), Print(display_line))?;
-        }
+        // Get buffer view centered around cursor line
+        let viewport_start = info.cursor.line.saturating_sub(viewport_height / 2);
+        let buffer_view = self.editor.get_buffer_view(viewport_start, viewport_height);
 
-        // Position cursor
-        let visual_line = view.cursor.line.saturating_sub(self.viewport_offset) as u16;
-        let visual_col = view.cursor.column as u16;
-        execute!(
-            stdout(),
-            cursor::MoveTo(visual_col, visual_line),
-            cursor::Show
-        )?;
+        // Calculate line number width (minimum 3 chars for padding)
+        let line_num_width = info.line_count.to_string().len().max(3);
 
-        std::io::Write::flush(&mut stdout())?;
-        Ok(())
+        // Format buffer text with line numbers
+        let lines_with_numbers: Vec<Line> = buffer_view.lines.iter().enumerate()
+            .map(|(idx, line_text)| {
+                let line_num = viewport_start + idx + 1;
+                let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
+
+                Line::from(vec![
+                    Span::styled(
+                        line_num_str,
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(line_text),
+                ])
+            })
+            .collect();
+
+        // Render editor content without borders
+        let paragraph = Paragraph::new(lines_with_numbers);
+        frame.render_widget(paragraph, editor_area);
+
+        // Render status line
+        let status_line = self.create_status_line(&info);
+        frame.render_widget(status_line, status_area);
+
+        // Set cursor position (accounting for line number column and viewport)
+        let cursor_line = buffer_view.cursor.line.saturating_sub(viewport_start);
+        let cursor_col = buffer_view.cursor.column;
+
+        let cursor_pos = ratatui::layout::Position::new(
+            (cursor_col + line_num_width + 1) as u16,  // +line_num_width+1 for line numbers and space
+            cursor_line as u16,
+        );
+
+        frame.set_cursor_position(cursor_pos);
+    }
+
+    fn create_status_line(&self, info: &crate::editor::EditorInfo) -> Paragraph<'_> {
+        let modified_indicator = if info.modified { "[+]" } else { "   " };
+        let filename = info.filepath.as_deref().unwrap_or("[No Name]");
+        let position = format!("Ln {}, Col {}", info.cursor.line + 1, info.cursor.column + 1);
+        let stats = format!("{} lines, {} chars", info.line_count, info.char_count);
+
+        let status_text = format!(
+            "{} {} | {} | {}",
+            modified_indicator, filename, position, stats
+        );
+
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                status_text,
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .style(Style::default().bg(Color::DarkGray))
     }
 
     fn handle_input(&mut self) -> Result<()> {
-        if let Event::Key(key) = event::read()? {
-            // Clear message on any key press
-            let command = self.key_to_command(key);
-
-            if let Some(cmd) = command {
-                self.editor.execute_command(cmd);
-                self.adjust_viewport();
-            } else if matches!(
-                (key.code, key.modifiers),
-                (KeyCode::Char('c'), KeyModifiers::CONTROL)
-            ) {
-                self.handle_quit()?;
+        match event::read()? {
+            Event::Key(key) => {
+                let command = self.key_to_command(key);
+                if let Some(cmd) = command {
+                    self.editor.execute_command(cmd);
+                } else if matches!(
+                    (key.code, key.modifiers),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                ) {
+                    self.handle_quit()?;
+                }
             }
+            _ => (),
         }
 
         Ok(())
     }
 
-    fn key_to_command(&self, key: KeyEvent) -> Option<Command> {
+    fn key_to_command(&self, key: KeyEvent) -> Option<EditorInput> {
         match (key.code, key.modifiers) {
             // File operations
-            (KeyCode::Char('s'), KeyModifiers::CONTROL) => Some(Command::Save),
+            (KeyCode::Char('s'), KeyModifiers::CONTROL) => Some(EditorInput::Save),
             (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                // Simplified - in real implementation, prompt for filename
-                Some(Command::SaveAs("untitled.txt".to_string()))
+                Some(EditorInput::SaveAs("untitled.txt".to_string()))
             }
 
+            // Buffer management
+            (KeyCode::Char('n'), KeyModifiers::CONTROL) => Some(EditorInput::NewBuffer),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => Some(EditorInput::DeleteBuffer),
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => Some(EditorInput::PreviousBuffer),
+            (KeyCode::Char('l'), KeyModifiers::CONTROL) => Some(EditorInput::NextBuffer),
+
             // Navigation
-            (KeyCode::Left, _) => Some(Command::MoveLeft(1)),
-            (KeyCode::Right, _) => Some(Command::MoveRight(1)),
-            (KeyCode::Up, _) => Some(Command::MoveUp(1)),
-            (KeyCode::Down, _) => Some(Command::MoveDown(1)),
+            (KeyCode::Left, _) => Some(EditorInput::MoveLeft(1)),
+            (KeyCode::Right, _) => Some(EditorInput::MoveRight(1)),
+            (KeyCode::Up, _) => Some(EditorInput::MoveUp(1)),
+            (KeyCode::Down, _) => Some(EditorInput::MoveDown(1)),
 
             // Editing
-            (KeyCode::Backspace, _) => Some(Command::Backspace),
-            (KeyCode::Delete, _) => Some(Command::DeleteChar),
-            (KeyCode::Enter, _) => Some(Command::InsertNewLine),
-            (KeyCode::Tab, _) => Some(Command::InsertString("    ".to_string())),
+            (KeyCode::Backspace, _) => Some(EditorInput::Backspace),
+            (KeyCode::Delete, _) => Some(EditorInput::DeleteChar),
+            (KeyCode::Enter, _) => Some(EditorInput::InsertNewLine),
+            (KeyCode::Tab, _) => Some(EditorInput::InsertString("    ".to_string())),
 
             // Character input
             (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-                Some(Command::InsertChar(c))
+                Some(EditorInput::InsertChar(c))
             }
 
             _ => None,
@@ -131,26 +177,6 @@ impl Terminal {
 
     fn handle_quit(&mut self) -> Result<()> {
         self.running = false;
-        Ok(())
-    }
-
-    fn adjust_viewport(&mut self) {
-        let info = self.editor.get_info();
-        let display_height = self.terminal_size.1.saturating_sub(2) as usize;
-
-        // Scroll down if cursor is below visible area
-        if info.cursor.line >= self.viewport_offset + display_height {
-            self.viewport_offset = info.cursor.line.saturating_sub(display_height - 1);
-        }
-
-        // Scroll up if cursor is above visible area
-        if info.cursor.line < self.viewport_offset {
-            self.viewport_offset = info.cursor.line;
-        }
-    }
-
-    pub fn resize(&mut self) -> Result<()> {
-        self.terminal_size = terminal::size()?;
         Ok(())
     }
 }
