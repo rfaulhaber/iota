@@ -25,6 +25,9 @@ cargo build
 # Run the terminal frontend
 cargo run --bin terminal
 
+# Run the terminal frontend with a file
+cargo run --bin terminal /path/to/file.txt
+
 # Build in release mode
 cargo build --release
 
@@ -51,9 +54,12 @@ cargo check
 - The fundamental text storage unit using the Rope data structure from `ropey`
 - Handles all text operations: insert, delete, cursor movement
 - Manages file I/O (load from file, save, save-as)
-- Tracks modification state
+- Tracks modification state and filepath
 - Converts between cursor positions (byte offset) and line/column positions
 - Key methods:
+  - `new()`: Create empty buffer
+  - `from_file()`: Load buffer from file
+  - `save()`, `save_as()`: Write buffer to disk
   - `insert_char()`, `insert_string()`: Add text at cursor
   - `delete_char()`, `backspace()`: Remove text
   - `move_up()`, `move_down()`, `move_left()`, `move_right()`: Cursor navigation
@@ -61,23 +67,48 @@ cargo check
   - `get_lines()`: Extract lines for rendering
 
 **Editor (`editor.rs`)**
-- Orchestrates multiple buffers and manages the current buffer
+- Orchestrates multiple buffers and manages the current buffer index
 - Translates high-level `EditorInput` commands into buffer operations
 - Provides views of buffer content for rendering (`BufferView`)
 - Provides editor metadata for display (`EditorInfo`)
 - Command pattern: All user actions are `EditorInput` enum variants processed by `execute_command()`
-- Currently supports single buffer; multi-buffer support is planned
+- Supports multiple buffers with switching commands
+- Key methods:
+  - `new()`: Create editor with one empty buffer
+  - `with_file()`: Create editor with a file loaded
+  - `execute_command()`: Process all user input commands
+  - `get_buffer_view()`: Get rendered view of current buffer
+  - `get_info()`: Get current buffer metadata (cursor, filepath, modified state, etc.)
 
 **Terminal (`terminal.rs`)**
 - A frontend implementation using ratatui for terminal UI
 - Handles the event loop: draw, handle input, repeat
 - Maps keyboard events to `EditorInput` commands
-- Renders the editor state using ratatui widgets
+- Renders the editor state using ratatui's layout system
+- UI Layout:
+  - Main editor area with line numbers (no borders)
+  - Status line showing: modified indicator, filename, cursor position, buffer stats
+  - Line numbers are dynamically sized and right-aligned
+  - Cursor positioned accounting for line number gutter
 - Keybindings:
-  - `Ctrl-C`: Quit
-  - `Ctrl-S`: Save
-  - `Ctrl-W`: Save as
-  - Arrow keys, Enter, Backspace, Delete, Tab: Standard editing
+  - **File Operations:**
+    - `Ctrl-S`: Save current buffer
+    - `Ctrl-W`: Save as (currently hardcoded to "untitled.txt")
+  - **Buffer Management:**
+    - `Ctrl-N`: Create new buffer
+    - `Ctrl-D`: Delete current buffer (keeps at least one)
+    - `Ctrl-H`: Switch to previous buffer
+    - `Ctrl-L`: Switch to next buffer
+  - **Navigation:**
+    - Arrow keys: Move cursor
+  - **Editing:**
+    - Enter: Insert newline
+    - Backspace: Delete character before cursor
+    - Delete: Delete character at cursor
+    - Tab: Insert 4 spaces
+    - Printable characters: Insert at cursor
+  - **System:**
+    - `Ctrl-C`: Quit editor
 
 **Location Types (`location.rs`)**
 - `Position`: Line and column coordinates (0-indexed)
@@ -100,17 +131,37 @@ User Input → Terminal (handle_input)
 1. **Cursor Position Tracking**: The buffer maintains `cursor_pos` as a character index (not byte index). Use `rope.char_to_byte()` and `rope.byte_to_char()` for conversions when needed.
 
 2. **Line/Column vs Cursor**:
-   - `Position` uses line/column (user-facing coordinates)
+   - `Position` uses line/column (user-facing coordinates, 0-indexed internally)
    - Buffer internally uses `cursor_pos` (character offset)
    - Use `cursor_to_position()` and `position_to_cursor()` to convert
+   - Status line displays 1-indexed line/column for user-friendliness
 
 3. **Rope Operations**: When deleting or inserting, rope operations work with byte ranges, but cursor tracking uses character positions. The buffer handles this conversion internally.
 
-4. **Multiple Binaries**: The project structure supports multiple frontends:
-   - `bin/terminal.rs`: Terminal UI frontend
+4. **Terminal Rendering**:
+   - Uses ratatui's `Layout::vertical()` to split screen into editor area and status line
+   - Line numbers are rendered as `Span` widgets with dark gray styling
+   - Cursor position accounts for line number gutter width
+   - Viewport scrolling centers cursor when possible
+
+5. **Buffer Management**:
+   - Editor maintains a `Vec<Buffer>` and `current_buffer` index
+   - Buffer switching wraps around (circular navigation)
+   - At least one buffer is always present (cannot delete last buffer)
+   - Each buffer tracks its own cursor, filepath, and modified state
+
+6. **File I/O**:
+   - Files can be opened from command line: `cargo run --bin terminal file.txt`
+   - `EditorInput::OpenFile` creates new buffer and switches to it
+   - `Save` writes to buffer's current filepath (errors if no filepath set)
+   - `SaveAs` writes to new path and updates buffer's filepath
+   - File I/O errors are currently silently ignored (TODO: proper error handling)
+
+7. **Multiple Binaries**: The project structure supports multiple frontends:
+   - `bin/terminal.rs`: Terminal UI frontend binary
    - Main library exports core functionality via `lib.rs`
 
-5. **Incomplete Features**: Many `EditorInput` variants are marked `todo!()` in the editor (undo/redo, range deletion, etc.)
+8. **Incomplete Features**: Some `EditorInput` variants are marked `todo!()` (undo/redo, range deletion, etc.)
 
 ## Code Organization
 
@@ -128,5 +179,8 @@ bin/terminal.rs     - Terminal binary entrypoint
 - The project uses Rust 2024 edition
 - No tests are currently implemented - this is an area that needs work
 - The client/server architecture mentioned in README.org is not yet implemented
-- Multiple buffers are supported by the Editor struct but not yet exposed in the UI
+- Multiple buffers are now supported and exposed via Ctrl-N/D/H/L keybindings
 - Lua configuration support is planned but not implemented
+- Error handling for file I/O needs improvement (currently errors are ignored)
+- SaveAs currently hardcoded to "untitled.txt" - needs proper file path input UI
+- No undo/redo functionality yet
