@@ -1,8 +1,8 @@
 use crate::location::Position;
 use ropey::Rope;
-use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio::fs;
 
 type BufferResult<T> = Result<T, BufferError>;
 
@@ -37,10 +37,10 @@ impl Buffer {
     }
 
     /// Create a buffer from a file
-    pub fn from_file(path: &str) -> BufferResult<Self> {
+    pub async fn from_file(path: &str) -> BufferResult<Self> {
         let filepath = PathBuf::from(path);
         let file_name = filepath.file_name();
-        let rope = Rope::from_str(&fs::read_to_string(&filepath)?);
+        let rope = Rope::from_str(&fs::read_to_string(&filepath).await?);
 
         Ok(Self {
             rope,
@@ -56,9 +56,13 @@ impl Buffer {
     }
 
     /// Save the buffer to its file
-    pub fn save(&mut self) -> BufferResult<()> {
+    pub async fn save(&mut self) -> BufferResult<()> {
         if let Some(ref path) = self.filepath {
-            self.rope.write_to(fs::File::create(path)?)?;
+            // Convert rope to string in memory (fast)
+            let content = self.rope.to_string();
+
+            // Async write - doesn't block the runtime
+            fs::write(path, content).await?;
             self.modified = false;
             Ok(())
         } else {
@@ -67,9 +71,14 @@ impl Buffer {
     }
 
     /// Save the buffer to a specific file
-    pub fn save_as(&mut self, path: &str) -> BufferResult<()> {
+    pub async fn save_as(&mut self, path: &str) -> BufferResult<()> {
         let filepath = PathBuf::from(path);
-        self.rope.write_to(fs::File::create(&filepath)?)?;
+
+        // Convert rope to string in memory (fast)
+        let content = self.rope.to_string();
+
+        // Async write - doesn't block the runtime
+        fs::write(&filepath, content).await?;
         self.filepath = Some(filepath);
         self.modified = false;
         Ok(())
@@ -78,14 +87,14 @@ impl Buffer {
     /// Insert a character at the cursor position
     pub fn insert_char(&mut self, ch: char) {
         self.rope.insert_char(self.cursor_pos, ch);
-        self.cursor_pos += ch.len_utf8();
+        self.cursor_pos += 1; // Characters are always 1 char, not bytes
         self.modified = true;
     }
 
     /// Insert a string at the cursor position
     pub fn insert_string(&mut self, s: &str) {
         self.rope.insert(self.cursor_pos, s);
-        self.cursor_pos += s.len();
+        self.cursor_pos += s.chars().count(); // Count characters, not bytes
         self.modified = true;
     }
 

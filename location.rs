@@ -1,5 +1,5 @@
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub line: usize,
     pub column: usize,
@@ -11,7 +11,7 @@ impl Position {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
     pub start: Position,
     pub end: Position,

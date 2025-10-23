@@ -1,19 +1,19 @@
-use anyhow::Result;
 use iota::{editor::Editor, terminal::Terminal};
-use std::env;
 
-fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
 
-    // Open file if provided, otherwise create empty editor
+    let args: Vec<String> = std::env::args().collect();
+
     let editor = if args.len() > 1 {
-        Editor::with_file(&args[1])?
+        Editor::with_file(&args[1]).await?
     } else {
         Editor::new()
     };
 
     let mut frontend = Terminal::new(editor)?;
-    frontend.run()?;
+    frontend.run().await?;
 
     Ok(())
 }
