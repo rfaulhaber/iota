@@ -344,20 +344,6 @@ impl Editor {
                             current_buffer.move_down(c)
                         });
                         self.update_view_cursor_sticky(cursor);
-
-                        let new_cursor_pos = self
-                            .buffers
-                            .get(&buffer_id)
-                            .unwrap()
-                            .cursor_to_position(cursor);
-
-                        let current_scroll_line =
-                            self.views.get(&self.current_view).unwrap().scroll_line();
-
-                        if new_cursor_pos.line > current_scroll_line {
-                            self.update_view_scroll_line(new_cursor_pos.line);
-                        }
-
                         events.push(EditorEvent::Redraw);
                     }
                     EditorInput::MoveLeft(count) => {
@@ -394,10 +380,10 @@ impl Editor {
     }
 
     /// Get a view of the buffer for rendering
-    pub fn get_render_data(&self, viewport_height: usize) -> RenderData {
+    pub fn get_render_data(&self, viewport_start: usize, viewport_height: usize) -> RenderData {
         let view = self.views.get(&self.current_view).unwrap();
         let buffer = self.buffers.get(&view.buffer_id()).unwrap();
-        let lines = buffer.get_lines(view.scroll_line(), viewport_height);
+        let lines = buffer.get_lines(viewport_start, viewport_height);
 
         RenderData {
             lines,

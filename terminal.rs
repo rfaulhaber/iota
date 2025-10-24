@@ -168,7 +168,7 @@ impl Terminal {
         let viewport_height = editor_area.height as usize;
 
         let viewport_start = info.cursor.line.saturating_sub(viewport_height - 1);
-        let render_data = self.editor.get_render_data(viewport_height);
+        let render_data = self.editor.get_render_data(viewport_start, viewport_height);
 
         let line_num_width = info.line_count.to_string().len().max(3);
 
