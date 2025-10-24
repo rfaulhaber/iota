@@ -1,14 +1,49 @@
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{Editor, EditorEvent, EditorInfo};
+use crate::input::{self, EditorKey};
 use anyhow::Result;
+use ratatui::layout;
 use ratatui::{
     Frame,
-    crossterm::event::{self, Event},
+    crossterm::event::{self, Event, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 use tokio::sync::mpsc;
+
+/// Convert a ratatui KeyEvent into our platform-independent EditorKey
+fn key_event_to_editor_key(key: KeyEvent) -> Option<EditorKey> {
+    // Convert crossterm's KeyCode to our KeyCode
+    let code = match key.code {
+        event::KeyCode::Char(c) => input::KeyCode::Char(c),
+        event::KeyCode::Backspace => input::KeyCode::Backspace,
+        event::KeyCode::Enter => input::KeyCode::Enter,
+        event::KeyCode::Left => input::KeyCode::Left,
+        event::KeyCode::Right => input::KeyCode::Right,
+        event::KeyCode::Up => input::KeyCode::Up,
+        event::KeyCode::Down => input::KeyCode::Down,
+        event::KeyCode::Home => input::KeyCode::Home,
+        event::KeyCode::End => input::KeyCode::End,
+        event::KeyCode::PageUp => input::KeyCode::PageUp,
+        event::KeyCode::PageDown => input::KeyCode::PageDown,
+        event::KeyCode::Tab => input::KeyCode::Tab,
+        event::KeyCode::Delete => input::KeyCode::Delete,
+        event::KeyCode::Esc => input::KeyCode::Escape,
+        event::KeyCode::F(n) => input::KeyCode::F(n),
+        _ => return None, // Ignore unhandled keys
+    };
+
+    // Extract modifiers from crossterm's bitflags
+    let modifiers = input::KeyModifiers {
+        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+        alt: key.modifiers.contains(KeyModifiers::ALT),
+        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        meta: key.modifiers.contains(KeyModifiers::SUPER),
+    };
+
+    Some(EditorKey { code, modifiers })
+}
 
 #[derive(Debug, Clone)]
 enum MessageType {
@@ -36,40 +71,81 @@ impl Terminal {
         // Create a channel for events
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        // Spawn a blocking task to read events in a tight loop
-        // This prevents blocking the async runtime
-        let _event_task = tokio::task::spawn_blocking(move || -> Result<()> {
+        // Spawn a blocking task to read events
+        // Uses poll with 250ms timeout - low CPU usage, responsive shutdown
+        let event_task = tokio::task::spawn_blocking(move || -> Result<()> {
             loop {
-                match event::read() {
-                    Ok(event) => {
-                        if event_tx.send(event).is_err() {
-                            log::info!("Event channel closed, stopping event reader");
-                            break;
+                // Poll with timeout so we can check if channel closed
+                // 250ms is long enough to avoid CPU waste, short enough for responsive exit
+                if event::poll(std::time::Duration::from_millis(250))? {
+                    match event::read() {
+                        Ok(event) => {
+                            if event_tx.send(event).is_err() {
+                                // Channel closed, main loop has exited
+                                log::info!("Event channel closed, stopping event reader");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to read event: {}", e);
+                            return Err(e.into());
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to read event: {}", e);
-                        return Err(e.into());
+                } else {
+                    // No event ready, check if channel is still open
+                    if event_tx.is_closed() {
+                        log::info!("Event channel closed, stopping event reader");
+                        break;
                     }
                 }
             }
             Ok(())
         });
 
+        // Initial draw
+        term.draw(|frame| self.draw(frame))?;
+
         let mut running = true;
         while running {
-            term.draw(|frame| self.draw(frame))?;
-
-            if let Some(should_shutdown) = self.handle_input(&mut event_rx).await? {
-                running = !should_shutdown;
+            // Wait for the next event (blocks until event arrives or channel closes)
+            match self.handle_input(&mut event_rx).await? {
+                Some((should_shutdown, needs_redraw)) => {
+                    if should_shutdown {
+                        running = false;
+                    } else if needs_redraw {
+                        term.draw(|frame| self.draw(frame))?;
+                    }
+                }
+                None => {
+                    // Channel closed, exit
+                    running = false;
+                }
             }
         }
 
         ratatui::restore();
 
+        // Drop the receiver to signal the event task to stop
         drop(event_rx);
 
-        std::process::exit(0);
+        // Wait for the event task to finish cleanly
+        // With polling at 250ms intervals, it should exit within 500ms
+        match tokio::time::timeout(std::time::Duration::from_millis(500), event_task).await {
+            Ok(Ok(Ok(()))) => {
+                log::debug!("Event task exited cleanly");
+            }
+            Ok(Ok(Err(e))) => {
+                log::warn!("Event task exited with error: {:?}", e);
+            }
+            Ok(Err(e)) => {
+                log::warn!("Event task panicked: {:?}", e);
+            }
+            Err(_) => {
+                log::warn!("Event task did not exit within timeout (this shouldn't happen)");
+            }
+        }
+
+        Ok(())
     }
 
     fn draw(&self, frame: &mut Frame) {
@@ -91,12 +167,12 @@ impl Terminal {
 
         let viewport_height = editor_area.height as usize;
 
-        let viewport_start = info.cursor.line.saturating_sub(viewport_height / 2);
-        let buffer_view = self.editor.get_buffer_view(viewport_start, viewport_height);
+        let viewport_start = info.cursor.line.saturating_sub(viewport_height - 1);
+        let render_data = self.editor.get_render_data(viewport_height);
 
         let line_num_width = info.line_count.to_string().len().max(3);
 
-        let lines_with_numbers: Vec<Line> = buffer_view
+        let lines_with_numbers: Vec<Line> = render_data
             .lines
             .iter()
             .enumerate()
@@ -122,18 +198,16 @@ impl Terminal {
         let message_line = self.create_message_line();
         frame.render_widget(message_line, message_area);
 
-        let cursor_line = buffer_view.cursor.line.saturating_sub(viewport_start);
-        let cursor_col = buffer_view.cursor.column;
+        let cursor_line = render_data.cursor.line.saturating_sub(viewport_start);
+        let cursor_col = render_data.cursor.column;
 
-        let cursor_pos = ratatui::layout::Position::new(
-            (cursor_col + line_num_width + 1) as u16,
-            cursor_line as u16,
-        );
+        let cursor_pos =
+            layout::Position::new((cursor_col + line_num_width + 1) as u16, cursor_line as u16);
 
         frame.set_cursor_position(cursor_pos);
     }
 
-    fn create_status_line(&self, info: &crate::editor::EditorInfo) -> Paragraph<'_> {
+    fn create_status_line(&self, info: &EditorInfo) -> Paragraph<'_> {
         let modified_indicator = if info.modified { "[+]" } else { "   " };
         let filename = info.filepath.as_deref().unwrap_or("[No Name]");
         let position = format!(
@@ -161,50 +235,61 @@ impl Terminal {
     async fn handle_input(
         &mut self,
         event_rx: &mut mpsc::UnboundedReceiver<Event>,
-    ) -> Result<Option<bool>> {
+    ) -> Result<Option<(bool, bool)>> {
         let mut should_shutdown = false;
+        let mut needs_redraw = false;
 
-        if let Some(first_event) = event_rx.recv().await {
-            if let Some(shutdown) = self.process_event(first_event).await? {
-                should_shutdown = shutdown;
-            }
+        // Block waiting for first event
+        let event = match event_rx.recv().await {
+            Some(event) => event,
+            None => return Ok(None), // Channel closed
+        };
 
-            while let Ok(event) = event_rx.try_recv() {
-                if let Some(shutdown) = self.process_event(event).await? {
-                    should_shutdown = shutdown;
-                }
-            }
+        if let Some((shutdown, redraw)) = self.process_event(event).await? {
+            should_shutdown = shutdown;
+            needs_redraw = needs_redraw || redraw;
         }
 
-        if should_shutdown {
-            Ok(Some(true))
-        } else {
-            Ok(None)
-        }
+        // TODO send back something more useful
+        Ok(Some((should_shutdown, needs_redraw)))
     }
 
-    async fn process_event(&mut self, event: Event) -> Result<Option<bool>> {
+    async fn process_event(&mut self, event: Event) -> Result<Option<(bool, bool)>> {
         match event {
             Event::Key(key) => {
-                let editor_events = self.editor.process_key_event(key).await;
+                // Convert terminal key event to editor key
+                let editor_key = match key_event_to_editor_key(key) {
+                    Some(k) => k,
+                    None => return Ok(None), // Ignore unhandled keys
+                };
+
+                let editor_events = self.editor.process_key(editor_key).await;
+
+                let mut should_shutdown = false;
+                let mut needs_redraw = false;
 
                 // Respond to events from the editor
                 for editor_event in editor_events {
                     match editor_event {
                         EditorEvent::Shutdown => {
-                            // TODO this is kind of dumb, do something else
-                            return Ok(Some(true));
+                            should_shutdown = true;
                         }
                         EditorEvent::Redraw => {
-                            // Redraw will happen automatically on next loop iteration
+                            needs_redraw = true;
                         }
                         EditorEvent::Error(msg) => {
                             self.message = Some((msg, MessageType::Error));
+                            needs_redraw = true;
                         }
                         EditorEvent::Info(msg) => {
                             self.message = Some((msg, MessageType::Info));
+                            needs_redraw = true;
                         }
                     }
+                }
+
+                if should_shutdown || needs_redraw {
+                    return Ok(Some((should_shutdown, needs_redraw)));
                 }
             }
             _ => (),
