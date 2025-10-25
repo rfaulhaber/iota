@@ -148,7 +148,7 @@ impl Terminal {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
         // Split the screen into editor area, status line, and message line
@@ -166,11 +166,18 @@ impl Terminal {
         let info = self.editor.get_info();
 
         let viewport_height = editor_area.height as usize;
-
-        let viewport_start = info.cursor.line.saturating_sub(viewport_height - 1);
-        let render_data = self.editor.get_render_data(viewport_start, viewport_height);
-
         let line_num_width = info.line_count.to_string().len().max(3);
+        // Account for line numbers (width + space) when calculating text viewport width
+        let viewport_width = (editor_area.width as usize).saturating_sub(line_num_width + 1);
+
+        // Adjust scroll positions to keep cursor visible
+        self.editor.adjust_scroll(viewport_width, viewport_height);
+
+        // Get the view's scroll position (now properly adjusted)
+        let view = self.editor.get_current_view().unwrap();
+        let viewport_start = view.scroll_line();
+        let scroll_column = view.scroll_column();
+        let render_data = self.editor.get_render_data(viewport_start, viewport_height);
 
         let lines_with_numbers: Vec<Line> = render_data
             .lines
@@ -180,9 +187,16 @@ impl Terminal {
                 let line_num = viewport_start + idx + 1;
                 let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
 
+                // Apply horizontal scrolling by skipping scroll_column characters
+                let visible_text: String = line_text
+                    .chars()
+                    .skip(scroll_column)
+                    .take(viewport_width)
+                    .collect();
+
                 Line::from(vec![
                     Span::styled(line_num_str, Style::default().fg(Color::DarkGray)),
-                    Span::raw(line_text),
+                    Span::raw(visible_text),
                 ])
             })
             .collect();
@@ -199,7 +213,8 @@ impl Terminal {
         frame.render_widget(message_line, message_area);
 
         let cursor_line = render_data.cursor.line.saturating_sub(viewport_start);
-        let cursor_col = render_data.cursor.column;
+        // Adjust cursor column for horizontal scroll
+        let cursor_col = render_data.cursor.column.saturating_sub(scroll_column);
 
         let cursor_pos =
             layout::Position::new((cursor_col + line_num_width + 1) as u16, cursor_line as u16);

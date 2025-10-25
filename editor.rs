@@ -450,12 +450,54 @@ impl Editor {
             .update_cursor(cursor);
     }
 
-    #[inline]
-    fn update_view_scroll_line(&mut self, line: usize) {
-        self.views
-            .get_mut(&self.current_view)
-            .expect("current_view must exist")
-            .set_scroll_line(line);
+    /// Adjust viewport scroll positions to keep cursor visible
+    /// Only scrolls when cursor approaches the edge of the viewport
+    pub fn adjust_scroll(&mut self, viewport_width: usize, viewport_height: usize) {
+        let view = self.views.get(&self.current_view).unwrap();
+        let buffer = self.buffers.get(&view.buffer_id()).unwrap();
+
+        let cursor_pos = buffer.cursor_to_position(view.cursor());
+        let mut scroll_line = view.scroll_line();
+        let mut scroll_column = view.scroll_column();
+
+        // Vertical scrolling - scroll when cursor is within 2 lines of edge
+        let scroll_margin = 0;
+
+        // Cursor too close to top
+        if cursor_pos.line < scroll_line + scroll_margin {
+            scroll_line = cursor_pos.line.saturating_sub(scroll_margin);
+        }
+        // Cursor too close to bottom
+        else if cursor_pos.line >= scroll_line + viewport_height.saturating_sub(scroll_margin) {
+            scroll_line = cursor_pos.line.saturating_sub(
+                viewport_height
+                    .saturating_sub(1)
+                    .saturating_sub(scroll_margin),
+            );
+        }
+
+        // Horizontal scrolling - scroll when cursor is within 5 columns of edge
+        let h_scroll_margin = 5;
+
+        // Cursor too close to left edge
+        if cursor_pos.column < scroll_column + h_scroll_margin {
+            scroll_column = cursor_pos.column.saturating_sub(h_scroll_margin);
+        }
+        // Cursor too close to right edge
+        else if cursor_pos.column
+            >= scroll_column + viewport_width.saturating_sub(h_scroll_margin)
+        {
+            scroll_column = cursor_pos.column.saturating_sub(
+                viewport_width
+                    .saturating_sub(1)
+                    .saturating_sub(h_scroll_margin),
+            );
+        }
+
+        // Update the view's scroll positions
+        let view = self.views.get_mut(&self.current_view).unwrap();
+        view.set_scroll_line(scroll_line);
+        view.set_scroll_column(scroll_column);
     }
 }
 
