@@ -116,6 +116,50 @@ impl Editor {
         })
     }
 
+    /// Create a new buffer with a view and switch to it
+    /// Returns the ViewId of the newly created view
+    fn create_buffer_with_view(&mut self, buffer: Buffer) -> ViewId {
+        let buffer_id = BufferId::new(self.next_buffer_id);
+        let view_id = ViewId::new(self.next_view_id);
+        self.next_buffer_id += 1;
+        self.next_view_id += 1;
+
+        self.buffers.insert(buffer_id, buffer);
+        self.views.insert(view_id, View::new(buffer_id));
+        self.view_order.push(view_id);
+        self.current_view = view_id;
+
+        view_id
+    }
+
+    /// Switch to the next view in the view order (wraps around)
+    fn next_view(&mut self) {
+        if let Some(current_idx) = self
+            .view_order
+            .iter()
+            .position(|&id| id == self.current_view)
+        {
+            let next_idx = (current_idx + 1) % self.view_order.len();
+            self.current_view = self.view_order[next_idx];
+        }
+    }
+
+    /// Switch to the previous view in the view order (wraps around)
+    fn prev_view(&mut self) {
+        if let Some(current_idx) = self
+            .view_order
+            .iter()
+            .position(|&id| id == self.current_view)
+        {
+            let prev_idx = if current_idx == 0 {
+                self.view_order.len() - 1
+            } else {
+                current_idx - 1
+            };
+            self.current_view = self.view_order[prev_idx];
+        }
+    }
+
     /// Process a key input and return events for the frontend to handle
     pub async fn process_key(&mut self, key: EditorKey) -> Vec<EditorEvent> {
         let mut events = Vec::new();
@@ -179,20 +223,12 @@ impl Editor {
         match command {
             // Buffer management commands
             EditorInput::NewBuffer => {
-                let buffer_id = BufferId::new(self.next_buffer_id);
-                let view_id = ViewId::new(self.next_view_id);
-                self.next_buffer_id += 1;
-                self.next_view_id += 1;
-
-                self.buffers.insert(buffer_id, Buffer::new());
-                self.views.insert(view_id, View::new(buffer_id));
-                self.view_order.push(view_id);
-                self.current_view = view_id;
+                self.create_buffer_with_view(Buffer::new());
                 events.push(EditorEvent::Redraw);
             }
             EditorInput::DeleteBuffer => {
                 // Get the current view to find its buffer
-                let current_view = self.views.get(&self.current_view).unwrap();
+                let current_view = self.get_current_view().unwrap();
                 let current_buffer_id = current_view.buffer_id();
 
                 // Only delete if there's more than one view
@@ -218,44 +254,18 @@ impl Editor {
                 }
             }
             EditorInput::NextBuffer => {
-                if let Some(current_idx) = self
-                    .view_order
-                    .iter()
-                    .position(|&id| id == self.current_view)
-                {
-                    let next_idx = (current_idx + 1) % self.view_order.len();
-                    self.current_view = self.view_order[next_idx];
-                    events.push(EditorEvent::Redraw);
-                }
+                self.next_view();
+                events.push(EditorEvent::Redraw);
             }
             EditorInput::PreviousBuffer => {
-                if let Some(current_idx) = self
-                    .view_order
-                    .iter()
-                    .position(|&id| id == self.current_view)
-                {
-                    let prev_idx = if current_idx == 0 {
-                        self.view_order.len() - 1
-                    } else {
-                        current_idx - 1
-                    };
-                    self.current_view = self.view_order[prev_idx];
-                    events.push(EditorEvent::Redraw);
-                }
+                self.prev_view();
+                events.push(EditorEvent::Redraw);
             }
 
             // File I/O commands
             EditorInput::OpenFile(path) => match Buffer::from_file(&path).await {
                 Ok(buffer) => {
-                    let buffer_id = BufferId::new(self.next_buffer_id);
-                    let view_id = ViewId::new(self.next_view_id);
-                    self.next_buffer_id += 1;
-                    self.next_view_id += 1;
-
-                    self.buffers.insert(buffer_id, buffer);
-                    self.views.insert(view_id, View::new(buffer_id));
-                    self.view_order.push(view_id);
-                    self.current_view = view_id;
+                    self.create_buffer_with_view(buffer);
                     events.push(EditorEvent::Info(format!("Opened {}", path)));
                     events.push(EditorEvent::Redraw);
                 }
@@ -269,7 +279,7 @@ impl Editor {
             },
             EditorInput::Save => {
                 // Get current buffer from current view
-                let current_view = self.views.get(&self.current_view).unwrap();
+                let current_view = self.get_current_view().unwrap();
                 let buffer_id = current_view.buffer_id();
 
                 if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -286,7 +296,7 @@ impl Editor {
             }
             EditorInput::SaveAs(path) => {
                 // Get current buffer from current view
-                let current_view = self.views.get(&self.current_view).unwrap();
+                let current_view = self.get_current_view().unwrap();
                 let buffer_id = current_view.buffer_id();
 
                 if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -308,7 +318,7 @@ impl Editor {
             // All other commands operate on the current view's buffer
             _ => {
                 // Get the current view and its buffer
-                let current_view = self.views.get(&self.current_view).unwrap();
+                let current_view = self.get_current_view().unwrap();
                 let buffer_id = current_view.buffer_id();
                 let current_cursor = current_view.cursor();
 
@@ -381,7 +391,7 @@ impl Editor {
 
     /// Get a view of the buffer for rendering
     pub fn get_render_data(&self, viewport_start: usize, viewport_height: usize) -> RenderData {
-        let view = self.views.get(&self.current_view).unwrap();
+        let view = self.get_current_view().unwrap();
         let buffer = self.buffers.get(&view.buffer_id()).unwrap();
         let lines = buffer.get_lines(viewport_start, viewport_height);
 
@@ -394,7 +404,7 @@ impl Editor {
     }
 
     pub fn get_info(&self) -> EditorInfo {
-        let view = self.views.get(&self.current_view).unwrap();
+        let view = self.get_current_view().unwrap();
         let buffer = self.buffers.get(&view.buffer_id()).unwrap();
         let (line_count, char_count) = buffer.stats();
 
@@ -417,6 +427,12 @@ impl Editor {
         self.views.get(&self.current_view)
     }
 
+    /// Get the current view mutably
+    #[inline]
+    pub fn get_current_view_mut(&mut self) -> Option<&mut View> {
+        self.views.get_mut(&self.current_view)
+    }
+
     /// Get the current buffer (from the current view)
     #[inline]
     pub fn get_current_buffer(&self) -> Option<&Buffer> {
@@ -435,8 +451,7 @@ impl Editor {
     /// Update the current view's cursor position
     #[inline]
     fn update_view_cursor(&mut self, cursor: usize) {
-        self.views
-            .get_mut(&self.current_view)
+        self.get_current_view_mut()
             .expect("current_view must exist")
             .set_cursor(cursor);
     }
@@ -444,8 +459,7 @@ impl Editor {
     /// Update the current view's cursor position while preserving desired column
     #[inline]
     fn update_view_cursor_sticky(&mut self, cursor: usize) {
-        self.views
-            .get_mut(&self.current_view)
+        self.get_current_view_mut()
             .expect("current_view must exist")
             .update_cursor(cursor);
     }
@@ -453,49 +467,39 @@ impl Editor {
     /// Adjust viewport scroll positions to keep cursor visible
     /// Only scrolls when cursor approaches the edge of the viewport
     pub fn adjust_scroll(&mut self, viewport_width: usize, viewport_height: usize) {
-        let view = self.views.get(&self.current_view).unwrap();
+        let view = self.get_current_view().unwrap();
         let buffer = self.buffers.get(&view.buffer_id()).unwrap();
 
         let cursor_pos = buffer.cursor_to_position(view.cursor());
         let mut scroll_line = view.scroll_line();
         let mut scroll_column = view.scroll_column();
 
-        // Vertical scrolling - scroll when cursor is within 2 lines of edge
-        let scroll_margin = 0;
-
+        // Vertical scrolling
         // Cursor too close to top
-        if cursor_pos.line < scroll_line + scroll_margin {
-            scroll_line = cursor_pos.line.saturating_sub(scroll_margin);
+        if cursor_pos.line < scroll_line {
+            scroll_line = cursor_pos.line;
         }
         // Cursor too close to bottom
-        else if cursor_pos.line >= scroll_line + viewport_height.saturating_sub(scroll_margin) {
-            scroll_line = cursor_pos.line.saturating_sub(
-                viewport_height
-                    .saturating_sub(1)
-                    .saturating_sub(scroll_margin),
-            );
+        else if cursor_pos.line >= scroll_line + viewport_height {
+            scroll_line = cursor_pos
+                .line
+                .saturating_sub(viewport_height.saturating_sub(1));
         }
 
-        // Horizontal scrolling - scroll when cursor is within 5 columns of edge
-        let h_scroll_margin = 5;
-
+        // Horizontal scrolling
         // Cursor too close to left edge
-        if cursor_pos.column < scroll_column + h_scroll_margin {
-            scroll_column = cursor_pos.column.saturating_sub(h_scroll_margin);
+        if cursor_pos.column < scroll_column {
+            scroll_column = cursor_pos.column;
         }
         // Cursor too close to right edge
-        else if cursor_pos.column
-            >= scroll_column + viewport_width.saturating_sub(h_scroll_margin)
-        {
-            scroll_column = cursor_pos.column.saturating_sub(
-                viewport_width
-                    .saturating_sub(1)
-                    .saturating_sub(h_scroll_margin),
-            );
+        else if cursor_pos.column >= scroll_column + viewport_width {
+            scroll_column = cursor_pos
+                .column
+                .saturating_sub(viewport_width.saturating_sub(1));
         }
 
         // Update the view's scroll positions
-        let view = self.views.get_mut(&self.current_view).unwrap();
+        let view = self.get_current_view_mut().unwrap();
         view.set_scroll_line(scroll_line);
         view.set_scroll_column(scroll_column);
     }
