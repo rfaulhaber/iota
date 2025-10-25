@@ -14,42 +14,73 @@ pub enum BufferError {
     NoPathSet,
 }
 
-/// A text buffer using the Rope data structure
+#[derive(Debug)]
+pub enum BufferKind {
+    Normal(NormalBuffer),
+    Mini(MiniBuffer),
+}
+
+/// A text buffer
 #[derive(Debug)]
 pub struct Buffer {
     rope: Rope,
+    kind: BufferKind,
+}
+
+#[derive(Debug)]
+pub struct NormalBuffer {
     filepath: Option<PathBuf>,
     name: Option<String>,
     modified: bool,
+    read_only: bool,
+}
+
+#[derive(Debug)]
+pub struct MiniBuffer {
+    prompt: Option<String>,
+    options: Vec<String>,
 }
 
 impl Buffer {
     /// Create a new empty buffer
-    pub fn new() -> Self {
+    pub fn new_normal() -> Self {
         Self {
             rope: Rope::new(),
-            filepath: None,
-            name: None,
-            modified: false,
+            kind: BufferKind::Normal(NormalBuffer {
+                filepath: None,
+                name: None,
+                modified: false,
+                read_only: false,
+            }),
         }
     }
 
     /// Create a buffer from a file
-    pub async fn from_file(path: &str) -> BufferResult<Self> {
+    pub async fn normal_from_file(path: &str) -> BufferResult<Self> {
         let filepath = PathBuf::from(path);
         let file_name = filepath.file_name();
         let rope = Rope::from_str(&fs::read_to_string(&filepath).await?);
 
         Ok(Self {
             rope,
-            filepath: Some(filepath.clone()),
-            // TODO make sure we're actually opening a file
-            name: match file_name {
-                Some(name) => Some(name.to_str().unwrap_or("*new*").to_string()),
-                None => Some("*new*".into()),
-            },
-            modified: false,
+            kind: BufferKind::Normal(NormalBuffer {
+                // TODO make sure we're actually opening a file
+                name: match file_name {
+                    Some(name) => Some(name.to_str().unwrap_or("*new*").to_string()),
+                    None => Some("*new*".into()),
+                },
+                filepath: Some(filepath.clone()),
+                modified: false,
+                read_only: false,
+            }),
         })
+    }
+
+    pub fn new_minibuffer(prompt: Option<String>, options: Vec<String>) -> Self {
+        Self {
+            rope: Rope::new(),
+            kind: BufferKind::Mini(MiniBuffer { prompt, options }),
+        }
     }
 
     /// Save the buffer to its file

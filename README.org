@@ -10,10 +10,10 @@ This is very much a work in progress!
 - fully configurable with Lua and as customizable as Emacs
 - buffer-based editing, where buffers have self-contained settings
 - controlling buffer behavior with a series of modes
+- first-class transients
 - support for emacs-like keychording
 - workspaces, which contain buffers and cross-buffer settings
 - native tree-sitter support and tree-sitter based editing
 - native LSP support
 - client/server separation. I plan to build and support several first-class implementations but it should be designed such that a user could build their own front-end implementation
 - eventually, collaborative editing
-- a first-class native magit-like framework
