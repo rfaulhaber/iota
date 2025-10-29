@@ -1,10 +1,12 @@
+
 /// Input abstraction layer for editor commands
 /// This decouples the editor from any specific frontend (terminal, GUI, web, etc.)
 /// Design shamelessly stolen from crossterm's KeyEvent structure
 use std::str::FromStr;
+use bincode::{Encode, Decode};
 
 /// Key codes - what key was pressed (similar to crossterm::KeyCode)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum KeyCode {
     Char(char),
     Backspace,
@@ -24,14 +26,14 @@ pub enum KeyCode {
 }
 
 /// A key event with modifiers (similar to crossterm::KeyEvent)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct EditorKey {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
 /// Modifier keys (similar to crossterm::KeyModifiers but using a struct instead of bitflags)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub struct KeyModifiers {
     pub ctrl: bool,
     pub alt: bool,
@@ -97,7 +99,7 @@ impl EditorKey {
 }
 
 /// A sequence of key presses (for keychording like Emacs C-x C-s)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct KeySequence {
     pub keys: Vec<EditorKey>,
 }

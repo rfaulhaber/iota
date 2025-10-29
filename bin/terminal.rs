@@ -1,4 +1,5 @@
-use iota::{editor::Editor, terminal::Terminal};
+use iota_editor::Editor;
+use iota_terminal::Terminal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

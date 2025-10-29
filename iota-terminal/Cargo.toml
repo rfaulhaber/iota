@@ -1,0 +1,16 @@
+[package]
+name = "iota-terminal"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+ratatui = "0.29"
+iota-core = { path = "../iota-core" }
+iota-editor = { path = "../iota-editor" }
+iota-input = { path = "../iota-input" }
+anyhow.workspace = true
+tokio.workspace = true
+log.workspace = true

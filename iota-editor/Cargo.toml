@@ -1,0 +1,18 @@
+[package]
+name = "iota-editor"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+iota-core = { path = "../iota-core" }
+iota-input = { path = "../iota-input" }
+ropey = "1.6"
+interprocess.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+env_logger.workspace = true

@@ -3,18 +3,28 @@ name = "iota"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "lib.rs"
+
 [[bin]]
 name = "terminal"
 path = "bin/terminal.rs"
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
+iota-editor = { path = "./iota-editor" }
+iota-terminal = { path = "./iota-terminal" }
+anyhow.workspace = true
+env_logger.workspace = true
+tokio.workspace = true
+
+[workspace]
+members = ["iota-core", "iota-editor", "iota-input", "iota-protocol", "iota-server", "iota-terminal"]
+
+[workspace.dependencies]
 anyhow = "1"
+bincode = "2"
 env_logger = "0.11"
+interprocess = { version = "2.2", features = ["tokio"] }
 log = "0.4"
-ratatui = "0.29"
-ropey = "1.6"
 thiserror = "2"
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "fs", "macros", "sync", "time"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "fs", "macros", "sync", "time"] }

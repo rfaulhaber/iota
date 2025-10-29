@@ -1,6 +1,5 @@
-use crate::editor::{Editor, EditorEvent, EditorInfo};
-use crate::input::{self, EditorKey};
 use anyhow::Result;
+use iota_editor::editor::{Editor, EditorEvent, EditorInfo};
 use ratatui::layout;
 use ratatui::{
     Frame,
@@ -13,36 +12,36 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 /// Convert a ratatui KeyEvent into our platform-independent EditorKey
-fn key_event_to_editor_key(key: KeyEvent) -> Option<EditorKey> {
+fn key_event_to_editor_key(key: KeyEvent) -> Option<iota_input::EditorKey> {
     // Convert crossterm's KeyCode to our KeyCode
     let code = match key.code {
-        event::KeyCode::Char(c) => input::KeyCode::Char(c),
-        event::KeyCode::Backspace => input::KeyCode::Backspace,
-        event::KeyCode::Enter => input::KeyCode::Enter,
-        event::KeyCode::Left => input::KeyCode::Left,
-        event::KeyCode::Right => input::KeyCode::Right,
-        event::KeyCode::Up => input::KeyCode::Up,
-        event::KeyCode::Down => input::KeyCode::Down,
-        event::KeyCode::Home => input::KeyCode::Home,
-        event::KeyCode::End => input::KeyCode::End,
-        event::KeyCode::PageUp => input::KeyCode::PageUp,
-        event::KeyCode::PageDown => input::KeyCode::PageDown,
-        event::KeyCode::Tab => input::KeyCode::Tab,
-        event::KeyCode::Delete => input::KeyCode::Delete,
-        event::KeyCode::Esc => input::KeyCode::Escape,
-        event::KeyCode::F(n) => input::KeyCode::F(n),
+        event::KeyCode::Char(c) => iota_input::KeyCode::Char(c),
+        event::KeyCode::Backspace => iota_input::KeyCode::Backspace,
+        event::KeyCode::Enter => iota_input::KeyCode::Enter,
+        event::KeyCode::Left => iota_input::KeyCode::Left,
+        event::KeyCode::Right => iota_input::KeyCode::Right,
+        event::KeyCode::Up => iota_input::KeyCode::Up,
+        event::KeyCode::Down => iota_input::KeyCode::Down,
+        event::KeyCode::Home => iota_input::KeyCode::Home,
+        event::KeyCode::End => iota_input::KeyCode::End,
+        event::KeyCode::PageUp => iota_input::KeyCode::PageUp,
+        event::KeyCode::PageDown => iota_input::KeyCode::PageDown,
+        event::KeyCode::Tab => iota_input::KeyCode::Tab,
+        event::KeyCode::Delete => iota_input::KeyCode::Delete,
+        event::KeyCode::Esc => iota_input::KeyCode::Escape,
+        event::KeyCode::F(n) => iota_input::KeyCode::F(n),
         _ => return None, // Ignore unhandled keys
     };
 
     // Extract modifiers from crossterm's bitflags
-    let modifiers = input::KeyModifiers {
+    let modifiers = iota_input::KeyModifiers {
         ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
         alt: key.modifiers.contains(KeyModifiers::ALT),
         shift: key.modifiers.contains(KeyModifiers::SHIFT),
         meta: key.modifiers.contains(KeyModifiers::SUPER),
     };
 
-    Some(EditorKey { code, modifiers })
+    Some(iota_input::EditorKey { code, modifiers })
 }
 
 #[derive(Debug, Clone)]

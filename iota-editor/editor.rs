@@ -1,9 +1,9 @@
 use crate::{
     buffer::Buffer,
-    input::{EditorKey, KeyCode},
-    location::{self, Position},
     view::{View, ViewId},
 };
+use iota_core::location::{self, Position};
+use iota_input::{EditorKey, KeyCode};
 use std::collections::HashMap;
 
 /// Stable identifier for buffers

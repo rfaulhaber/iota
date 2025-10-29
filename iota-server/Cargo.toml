@@ -1,0 +1,17 @@
+[package]
+name = "iota-server"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+iota-editor = { path = "../iota-editor" }
+iota-input = { path = "../iota-input" }
+iota-protocol = { path = "../iota-protocol" }
+anyhow.workspace = true
+bincode.workspace = true
+interprocess.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

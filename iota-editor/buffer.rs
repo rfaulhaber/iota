@@ -1,4 +1,4 @@
-use crate::location::Position;
+use iota_core::location::Position;
 use ropey::Rope;
 use std::path::PathBuf;
 use thiserror::Error;
