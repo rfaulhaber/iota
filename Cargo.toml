@@ -1,24 +1,6 @@
-[package]
-name = "iota"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-path = "lib.rs"
-
-[[bin]]
-name = "terminal"
-path = "bin/terminal.rs"
-
-[dependencies]
-iota-editor = { path = "./iota-editor" }
-iota-terminal = { path = "./iota-terminal" }
-anyhow.workspace = true
-env_logger.workspace = true
-tokio.workspace = true
-
 [workspace]
 members = ["iota-core", "iota-editor", "iota-input", "iota-protocol", "iota-server", "iota-terminal"]
+resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1"

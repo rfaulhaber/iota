@@ -1,15 +1,24 @@
 use anyhow::Result;
-use iota_editor::editor::{Editor, EditorEvent, EditorInfo};
+use interprocess::local_socket::{
+    tokio::{prelude::*, Stream},
+    GenericNamespaced,
+};
+use iota_protocol::{EditorEvent, EditorInfo, Message, RenderData};
+use log::info;
 use ratatui::layout;
 use ratatui::{
-    Frame,
     crossterm::event::{self, Event, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
+    Frame,
 };
-use tokio::sync::mpsc;
+use std::path::PathBuf;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::mpsc,
+};
 
 /// Convert a ratatui KeyEvent into our platform-independent EditorKey
 fn key_event_to_editor_key(key: KeyEvent) -> Option<iota_input::EditorKey> {
@@ -52,16 +61,81 @@ enum MessageType {
 
 #[derive(Debug)]
 pub struct Terminal {
-    editor: Editor,
+    conn: Stream,
+    render_data: RenderData,
+    info: EditorInfo,
     message: Option<(String, MessageType)>,
 }
 
 impl Terminal {
-    pub fn new(editor: Editor) -> Result<Self> {
+    pub async fn connect(socket_path: PathBuf) -> Result<Self> {
+        let socket_name = socket_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid socket path"))?
+            .to_ns_name::<GenericNamespaced>()?;
+
+        info!("Connecting to server at: {:?}", socket_path);
+        let conn = Stream::connect(socket_name).await?;
+        info!("Connected to server");
+
+        // Initialize with empty state - will be updated on first message
+        let render_data = RenderData {
+            lines: vec![],
+            cursor: iota_protocol::Position { line: 0, column: 0 },
+            viewport_start: 0,
+            viewport_height: 0,
+        };
+
+        let info = EditorInfo {
+            cursor: iota_protocol::Position { line: 0, column: 0 },
+            filepath: None,
+            name: None,
+            modified: false,
+            line_count: 0,
+            char_count: 0,
+        };
+
         Ok(Self {
-            editor,
+            conn,
+            render_data,
+            info,
             message: None,
         })
+    }
+
+    /// Send a key press to the server and receive the updated state
+    async fn send_key(&mut self, key: iota_input::EditorKey) -> Result<Vec<EditorEvent>> {
+        // Create and encode message
+        let message = Message::KeyPress { key };
+        let encoded = message.encode()?;
+
+        // Send to server
+        self.conn.write_all(&encoded).await?;
+
+        // Read response length
+        let mut len_buf = [0u8; 4];
+        self.conn.read_exact(&mut len_buf).await?;
+        let msg_len = u32::from_be_bytes(len_buf) as usize;
+
+        // Read response data
+        let mut msg_buf = vec![0u8; msg_len];
+        self.conn.read_exact(&mut msg_buf).await?;
+
+        // Decode response
+        let response = Message::decode(&msg_buf)?;
+
+        match response {
+            Message::StateUpdate {
+                events,
+                render_data,
+                info,
+            } => {
+                self.render_data = render_data;
+                self.info = info;
+                Ok(events)
+            }
+            _ => Err(anyhow::anyhow!("Unexpected message type from server")),
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -162,23 +236,15 @@ impl Terminal {
         let status_area = chunks[1];
         let message_area = chunks[2];
 
-        let info = self.editor.get_info();
+        let line_num_width = self.info.line_count.to_string().len().max(3);
+        let viewport_start = self.render_data.viewport_start;
 
-        let viewport_height = editor_area.height as usize;
-        let line_num_width = info.line_count.to_string().len().max(3);
-        // Account for line numbers (width + space) when calculating text viewport width
-        let viewport_width = (editor_area.width as usize).saturating_sub(line_num_width + 1);
+        // For now, we don't have horizontal scrolling in the client
+        // The server could be extended to support this
+        let scroll_column = 0;
 
-        // Adjust scroll positions to keep cursor visible
-        self.editor.adjust_scroll(viewport_width, viewport_height);
-
-        // Get the view's scroll position (now properly adjusted)
-        let view = self.editor.get_current_view().unwrap();
-        let viewport_start = view.scroll_line();
-        let scroll_column = view.scroll_column();
-        let render_data = self.editor.get_render_data(viewport_start, viewport_height);
-
-        let lines_with_numbers: Vec<Line> = render_data
+        let lines_with_numbers: Vec<Line> = self
+            .render_data
             .lines
             .iter()
             .enumerate()
@@ -186,16 +252,9 @@ impl Terminal {
                 let line_num = viewport_start + idx + 1;
                 let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
 
-                // Apply horizontal scrolling by skipping scroll_column characters
-                let visible_text: String = line_text
-                    .chars()
-                    .skip(scroll_column)
-                    .take(viewport_width)
-                    .collect();
-
                 Line::from(vec![
                     Span::styled(line_num_str, Style::default().fg(Color::DarkGray)),
-                    Span::raw(visible_text),
+                    Span::raw(line_text.clone()),
                 ])
             })
             .collect();
@@ -204,16 +263,15 @@ impl Terminal {
         frame.render_widget(paragraph, editor_area);
 
         // Render status line
-        let status_line = self.create_status_line(&info);
+        let status_line = self.create_status_line();
         frame.render_widget(status_line, status_area);
 
         // Render message line
         let message_line = self.create_message_line();
         frame.render_widget(message_line, message_area);
 
-        let cursor_line = render_data.cursor.line.saturating_sub(viewport_start);
-        // Adjust cursor column for horizontal scroll
-        let cursor_col = render_data.cursor.column.saturating_sub(scroll_column);
+        let cursor_line = self.render_data.cursor.line.saturating_sub(viewport_start);
+        let cursor_col = self.render_data.cursor.column.saturating_sub(scroll_column);
 
         let cursor_pos =
             layout::Position::new((cursor_col + line_num_width + 1) as u16, cursor_line as u16);
@@ -221,15 +279,15 @@ impl Terminal {
         frame.set_cursor_position(cursor_pos);
     }
 
-    fn create_status_line(&self, info: &EditorInfo) -> Paragraph<'_> {
-        let modified_indicator = if info.modified { "[+]" } else { "   " };
-        let filename = info.filepath.as_deref().unwrap_or("[No Name]");
+    fn create_status_line(&self) -> Paragraph<'_> {
+        let modified_indicator = if self.info.modified { "[+]" } else { "   " };
+        let filename = self.info.filepath.as_deref().unwrap_or("[No Name]");
         let position = format!(
             "Ln {}, Col {}",
-            info.cursor.line + 1,
-            info.cursor.column + 1
+            self.info.cursor.line + 1,
+            self.info.cursor.column + 1
         );
-        let stats = format!("{} lines, {} chars", info.line_count, info.char_count);
+        let stats = format!("{} lines, {} chars", self.info.line_count, self.info.char_count);
 
         let status_text = format!(
             "{} {} | {} | {}",
@@ -277,7 +335,8 @@ impl Terminal {
                     None => return Ok(None), // Ignore unhandled keys
                 };
 
-                let editor_events = self.editor.process_key(editor_key).await;
+                // Send key to server and receive events
+                let editor_events = self.send_key(editor_key).await?;
 
                 let mut should_shutdown = false;
                 let mut needs_redraw = false;

@@ -19,14 +19,18 @@ This is currently a very early-stage project with a barebones editor implementat
 
 ### Building and Running
 ```bash
-# Build the project
+# Build the entire workspace
 cargo build
 
-# Run the terminal frontend
-cargo run --bin terminal
+# Build specific crates
+cargo build -p iota-server
+cargo build -p iota-terminal
 
-# Run the terminal frontend with a file
-cargo run --bin terminal /path/to/file.txt
+# Run the terminal client (auto-starts server if needed)
+cargo run -p iota-terminal
+
+# Or run the server manually (optional - terminal will auto-start it)
+cargo run -p iota-server
 
 # Build in release mode
 cargo build --release
@@ -41,16 +45,80 @@ cargo test <test_name>
 cargo check
 ```
 
+
+### Socket Path Configuration
+
+The server and client communicate via Unix domain sockets. The socket path is determined by environment variables in this priority order:
+
+1. **`$IOTA_SERVER_SOCKET`** - Explicit override (highest priority)
+2. **`$XDG_RUNTIME_DIR/iota-server.sock`** - XDG standard location (default on Linux)
+3. **`/tmp/iota-server.sock`** - Cross-platform fallback
+
+```bash
+# Default: Uses XDG_RUNTIME_DIR if set, otherwise /tmp
+cargo run -p iota-terminal
+
+# Custom socket path (both client and server must use same path)
+IOTA_SERVER_SOCKET=/path/to/custom.sock cargo run -p iota-terminal
+
+# Explicit XDG directory
+XDG_RUNTIME_DIR=/custom/runtime cargo run -p iota-terminal
+
+# Force /tmp fallback
+env -u IOTA_SERVER_SOCKET -u XDG_RUNTIME_DIR cargo run -p iota-terminal
+```
+
 ### Key Dependencies
 - `ropey`: Rope data structure for efficient text manipulation
-- `ratatui`: Terminal UI framework
+- `ratatui`: Terminal UI framework (client only)
 - `anyhow`/`thiserror`: Error handling
+- `bincode`: Binary serialization for client/server protocol
+- `interprocess`: Unix domain socket communication
+- `tokio`: Async runtime
 
 ## Architecture
 
+### Crate Structure
+
+The project is organized as a Cargo workspace with the following crates:
+
+**iota-core** - Core types
+- `Position`: Line/column coordinates
+- `Range`: Text range representation
+
+**iota-input** - Input handling
+- `EditorKey`: Platform-independent key representation
+- `KeyCode`: Key codes (Char, Arrow keys, etc.)
+- `KeyModifiers`: Ctrl, Alt, Shift, Meta
+
+**iota-editor** - Core editor logic
+- `Editor`: Orchestrates buffers and views
+- `Buffer`: Text storage and operations
+- `View`: Cursor and viewport state
+- `EditorEvent`: Events sent to frontends
+
+**iota-protocol** - Client/server protocol
+- `Message`: Bincode-serializable protocol messages
+  - `KeyPress`: Client → Server key events
+  - `StateUpdate`: Server → Client state updates
+- `Position`, `RenderData`, `EditorInfo`: Protocol DTOs
+- `get_socket_path()`: Environment-based socket path resolution
+
+**iota-server** - Server implementation
+- `Server`: Manages editor state and client connections
+- Listens on Unix domain socket
+- Handles multiple concurrent clients
+- Each client gets own async task with shared `Arc<RwLock<Editor>>`
+
+**iota-terminal** - Terminal frontend client
+- `Terminal`: ratatui-based TUI client
+- Connects to server via Unix socket
+- Sends key events, receives state updates
+- Renders editor state in terminal
+
 ### Core Components
 
-**Buffer (`buffer.rs`)**
+**Buffer (`iota-editor/buffer.rs`)**
 - The fundamental text storage unit using the Rope data structure from `ropey`
 - **STATELESS with respect to cursor position** - does not track cursor internally
 - Handles all text operations: insert, delete, cursor movement calculations
@@ -68,7 +136,7 @@ cargo check
   - `cursor_to_position(cursor)`, `position_to_cursor(pos)`: Convert between cursor formats
   - `get_lines(start, count)`: Extract lines for rendering
 
-**View (`view.rs`)** ⭐ NEW ARCHITECTURE LAYER
+**View (`iota-editor/view.rs`)** ⭐ CRITICAL ARCHITECTURE LAYER
 - Represents a view into a buffer with its own cursor and viewport state
 - **Separates presentation state from data** - critical for multi-window and client/server architecture
 - Each view can display the same buffer with different cursor positions and scroll positions
@@ -87,7 +155,7 @@ cargo check
   - `scroll_line()`, `set_scroll_line(line)`: Get/set viewport scroll position
   - `desired_column()`, `set_desired_column(col)`: Manage sticky column for vertical movement
 
-**Editor (`editor.rs`)**
+**Editor (`iota-editor/editor.rs`)**
 - **Orchestrates buffers AND views** - maintains separation between data and presentation
 - Translates high-level `EditorInput` commands into buffer operations through views
 - Architecture:
@@ -110,17 +178,28 @@ cargo check
   - `get_current_view()`: Get the current view
   - `get_current_buffer()`: Get current buffer (from current view's buffer_id)
 
-**Terminal (`terminal.rs`)**
-- A frontend implementation using ratatui for terminal UI
-- Handles the event loop: draw, handle input, repeat
-- Maps keyboard events to `EditorInput` commands
-- Renders the editor state using ratatui's layout system
+**Server (`iota-server/lib.rs`)**
+- Manages the shared `Editor` instance wrapped in `Arc<RwLock<>>`
+- Listens for client connections on Unix domain socket
+- Spawns async task per client connection
+- Processes `Message::KeyPress` from clients
+- Responds with `Message::StateUpdate` containing events, render data, and editor info
+- Socket path: `$IOTA_SERVER_SOCKET` → `$XDG_RUNTIME_DIR/iota-server.sock` → `/tmp/iota-server.sock`
+
+**Terminal Client (`iota-terminal/lib.rs` and `main.rs`)**
+- Frontend implementation using ratatui for terminal UI
+- Connects to server via Unix domain socket
+- Event loop: capture input → send to server → receive state → render
+- Maps keyboard events to `EditorKey` protocol messages
+- Renders received `RenderData` using ratatui's layout system
+- Does NOT embed Editor directly - purely a presentation layer
 - UI Layout:
   - Main editor area with line numbers (no borders)
   - Status line showing: modified indicator, filename, cursor position, buffer stats
+  - Message line for errors/info
   - Line numbers are dynamically sized and right-aligned
   - Cursor positioned accounting for line number gutter
-- Keybindings:
+- Keybindings (sent to server as EditorKey messages):
   - **File Operations:**
     - `Ctrl-S`: Save current buffer
     - `Ctrl-W`: Save as (currently hardcoded to "untitled.txt")
@@ -140,56 +219,168 @@ cargo check
   - **System:**
     - `Ctrl-C`: Quit editor
 
-**Location Types (`location.rs`)**
+**Location Types (`iota-core/location.rs`)**
 - `Position`: Line and column coordinates (0-indexed)
 - `Range`: Start and end positions for text ranges
 
-### Data Flow
+### Data Flow (Client/Server Architecture)
 
 ```
-User Input → Terminal (handle_input)
-          → EditorInput command
-          → Editor (execute_command)
-          → View (get cursor/viewport state)
-          → Buffer operations (via cursor from view)
-          → Modified buffer state + updated view cursor
-          → RenderData/EditorInfo (DTOs combining buffer data + view state)
-          → Terminal rendering (draw)
+┌─────────────────┐                           ┌─────────────────┐
+│  Terminal UI    │                           │     Server      │
+│  (iota-terminal)│                           │  (iota-server)  │
+└─────────────────┘                           └─────────────────┘
+        │                                              │
+        │ 1. User types 'x'                            │
+        │                                              │
+        │ 2. KeyEvent captured                         │
+        │    → Convert to EditorKey                    │
+        │                                              │
+        │ 3. Create Message::KeyPress                  │
+        │    → Bincode encode                          │
+        │                                              │
+        │ 4. Send via Unix socket ────────────────────▶│
+        │                                              │
+        │                                              │ 5. Decode message
+        │                                              │
+        │                                              │ 6. Call editor.process_key()
+        │                                              │    → Get view cursor
+        │                                              │    → buffer.insert_char()
+        │                                              │    → Update view cursor
+        │                                              │
+        │                                              │ 7. Collect EditorEvents
+        │                                              │
+        │                                              │ 8. Get RenderData
+        │                                              │    (lines, cursor, viewport)
+        │                                              │
+        │                                              │ 9. Get EditorInfo
+        │                                              │    (filepath, modified, etc.)
+        │                                              │
+        │                                              │ 10. Create Message::StateUpdate
+        │                                              │     → Bincode encode
+        │                                              │
+        │ 11. Receive state update ◄───────────────────┤
+        │                                              │
+        │ 12. Update local state:                      │
+        │     - render_data                            │
+        │     - info                                   │
+        │     - process events                         │
+        │                                              │
+        │ 13. Redraw UI if needed                      │
+        │     (ratatui rendering)                      │
+        │                                              │
+        └──────────────────────────────────────────────┘
+
+Message Format (bincode-encoded, length-prefixed):
+┌────────────┬──────────────────────────────┐
+│ 4 bytes    │ N bytes                      │
+│ (u32 len)  │ (bincode-encoded Message)    │
+└────────────┴──────────────────────────────┘
 ```
 
 ### Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                       Terminal                          │
-│                  (Frontend/Rendering)                   │
-└────────────────────┬────────────────────────────────────┘
-                     │ EditorInput
-                     │ EditorEvent
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                       Editor                            │
-│                   (Orchestration)                       │
-│  ┌──────────────────┐      ┌──────────────────┐       │
-│  │  Buffers (Data)  │      │  Views (State)   │       │
-│  │ ┌──────────────┐ │      │ ┌──────────────┐ │       │
-│  │ │ Buffer 1     │ │◄─────┤ │ View 1       │ │       │
-│  │ │ (text data)  │ │      │ │ cursor: 42   │ │       │
-│  │ └──────────────┘ │      │ │ scroll: 0    │ │       │
-│  │ ┌──────────────┐ │      │ └──────────────┘ │       │
-│  │ │ Buffer 2     │ │◄─┐   │ ┌──────────────┐ │       │
-│  │ │ (text data)  │ │  └───┤ │ View 2       │ │       │
-│  │ └──────────────┘ │      │ │ cursor: 100  │ │       │
-│  └──────────────────┘      │ │ scroll: 5    │ │       │
-│                            │ └──────────────┘ │       │
-│                            └──────────────────┘       │
-└─────────────────────────────────────────────────────────┘
+                    ┌─────────────────────────────┐
+                    │    Terminal Client 1        │
+                    │    (iota-terminal)          │
+                    │  - ratatui UI               │
+                    │  - Event capture            │
+                    │  - Rendering                │
+                    └──────────────┬──────────────┘
+                                   │ Unix Socket
+                                   │ (bincode msgs)
+                                   │
+    ┌──────────────────────────────┼──────────────────────────────┐
+    │                              │                              │
+    │                              ▼                              │
+    │  ┌─────────────────────────────────────────────────────┐   │
+    │  │           iota-server (Server Process)              │   │
+    │  │                                                     │   │
+    │  │  ┌────────────────────────────────────────────┐    │   │
+    │  │  │    Arc<RwLock<Editor>>                     │    │   │
+    │  │  │                                            │    │   │
+    │  │  │  ┌────────────────┐  ┌──────────────────┐ │    │   │
+    │  │  │  │ Buffers (Data) │  │  Views (State)   │ │    │   │
+    │  │  │  │ ┌────────────┐ │  │ ┌──────────────┐ │ │    │   │
+    │  │  │  │ │ Buffer 1   │◄┼──┼─┤ View 1       │ │ │    │   │
+    │  │  │  │ │ (Rope)     │ │  │ │ cursor: 42   │ │ │    │   │
+    │  │  │  │ └────────────┘ │  │ │ scroll: 0    │ │ │    │   │
+    │  │  │  │ ┌────────────┐ │  │ └──────────────┘ │ │    │   │
+    │  │  │  │ │ Buffer 2   │◄┼──┼─┤ View 2       │ │ │    │   │
+    │  │  │  │ │ (Rope)     │ │  │ │ cursor: 100  │ │ │    │   │
+    │  │  │  │ └────────────┘ │  │ │ scroll: 5    │ │ │    │   │
+    │  │  │  └────────────────┘  │ └──────────────┘ │ │    │   │
+    │  │  │                      └──────────────────┘ │    │   │
+    │  │  └────────────────────────────────────────────┘    │   │
+    │  │                                                     │   │
+    │  │  Connection Tasks (one per client):                │   │
+    │  │  - Decode Message::KeyPress                        │   │
+    │  │  - Call editor.process_key()                       │   │
+    │  │  - Encode Message::StateUpdate                     │   │
+    │  └─────────────────────────────────────────────────────┘   │
+    │                              │                              │
+    │                              │ Unix Socket                  │
+    └──────────────────────────────┼──────────────────────────────┘
+                                   │ (bincode msgs)
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │    Terminal Client 2        │
+                    │    (iota-terminal)          │
+                    │  - Same server, different   │
+                    │    socket connection        │
+                    └─────────────────────────────┘
 
-Key: View → Buffer relationship allows:
-- Multiple views of same buffer (View 1 and View 2 → Buffer 2)
-- Independent cursors per view
-- Foundation for window splitting and client/server
+Key Features:
+- Multiple clients can connect to same server
+- Editor state shared via Arc<RwLock<>>
+- Each client connection handled in separate async task
+- Bincode-encoded messages over Unix domain sockets
+- View → Buffer relationship enables concurrent editing
+- Socket path: $IOTA_SERVER_SOCKET → $XDG_RUNTIME_DIR/iota-server.sock → /tmp/iota-server.sock
 ```
+
+### Protocol Implementation Details
+
+**Message Format:**
+All messages are bincode-encoded with a 4-byte length prefix:
+```
+┌────────────┬──────────────────────────────┐
+│ 4 bytes    │ N bytes                      │
+│ (u32 len)  │ (bincode-encoded Message)    │
+└────────────┴──────────────────────────────┘
+```
+
+**Message Types:**
+```rust
+// Client → Server
+Message::KeyPress {
+    key: EditorKey,
+}
+
+// Server → Client
+Message::StateUpdate {
+    events: Vec<EditorEvent>,     // Shutdown, Redraw, Error(String), Info(String)
+    render_data: RenderData,      // lines, cursor, viewport_start, viewport_height
+    info: EditorInfo,             // cursor, filepath, name, modified, line/char counts
+}
+```
+
+**Communication Flow:**
+1. Client reads keyboard event → converts to `EditorKey`
+2. Client creates `Message::KeyPress` → encodes with length prefix → sends
+3. Server reads length → reads message bytes → decodes
+4. Server calls `editor.process_key(key)` → gets events
+5. Server gets `RenderData` and `EditorInfo` from editor
+6. Server creates `Message::StateUpdate` → encodes with length prefix → sends
+7. Client reads length → reads message bytes → decodes
+8. Client updates local state and redraws UI
+
+**Socket Path Resolution:**
+Implemented in `iota_protocol::get_socket_path()`:
+1. `$IOTA_SERVER_SOCKET` (explicit override)
+2. `$XDG_RUNTIME_DIR/iota-server.sock` (XDG standard)
+3. `/tmp/iota-server.sock` (fallback)
 
 ### Important Implementation Details
 
@@ -253,105 +444,168 @@ Key: View → Buffer relationship allows:
    - File I/O errors are logged and shown to user as EditorEvent::Error
 
 8. **Async Architecture**:
-   - **File I/O is async**: `save()`, `save_as()`, `from_file()` use tokio::fs
-   - **Everything else is sync**: Text operations, cursor movement, rendering
-   - **Event-driven rendering**: Only redraws when events trigger changes
+   - **Server side**:
+     - Socket listener runs async (tokio)
+     - Each client connection handled in separate async task
+     - Editor wrapped in `Arc<RwLock<>>` for concurrent access
+     - File I/O is async: `save()`, `save_as()`, `from_file()` use tokio::fs
+     - Text operations are sync (within RwLock critical sections)
+   - **Client side**:
+     - Event-driven rendering: Only redraws when server sends updates
      - Main loop blocks on `event_rx.recv().await` (zero CPU when idle)
      - Event polling thread uses 250ms timeout (checks for shutdown)
-     - Redraws only when `EditorEvent::Redraw` is emitted
-     - This architecture eliminates unnecessary redraws
+     - Redraws only when `EditorEvent::Redraw` is received from server
+     - Socket I/O is async (tokio)
    - This design choice:
      - ✅ Non-blocking file operations
-     - ✅ **Zero CPU usage when idle** (blocks waiting for input)
+     - ✅ **Zero CPU usage when idle** (blocks waiting for input/socket)
      - ✅ Simple synchronous text manipulation
      - ✅ Clean shutdown on Ctrl-C (event thread exits within 250ms)
      - ✅ Efficient rendering (only draws when needed)
+     - ✅ Multiple concurrent clients supported
      - ⏳ Future: Will need channels/actors for LSP and tree-sitter background tasks
 
-9. **Multiple Binaries**: The project structure supports multiple frontends:
-   - `bin/terminal.rs`: Terminal UI frontend binary
-   - Main library exports core functionality via `lib.rs`
-   - Future: Could have GUI frontend, web frontend, etc. (all sharing same Editor/Buffer/View logic)
+9. **Multiple Frontends**: The project structure supports multiple frontend implementations:
+   - `iota-terminal`: Terminal UI frontend using ratatui (✅ implemented)
+   - `iota-server`: Headless server that owns the Editor state (✅ implemented)
+   - Future frontends: GUI (egui/iced), web (WASM + WebSockets), etc.
+   - All frontends share the same protocol (`iota-protocol`)
+   - All share the same editor logic (`iota-editor`)
 
 10. **Incomplete Features**: Some `EditorInput` variants are marked `todo!()` (undo/redo, range deletion, etc.)
 
 ## Code Organization
 
+### Workspace Structure
+
+The project is organized as a Cargo virtual workspace (no root package):
+
 ```
-lib.rs              - Module exports
-editor.rs           - Editor orchestration, view/buffer management, command handling
-buffer.rs           - Text buffer implementation using Rope (stateless)
-view.rs             - View layer: cursor, viewport, presentation state
-location.rs         - Position and Range types
-input.rs            - Input handling and key parsing (EditorKey, KeySequence)
-terminal.rs         - Terminal UI frontend using ratatui
-bin/terminal.rs     - Terminal binary entrypoint
+iota/                        - Virtual workspace root
+├── Cargo.toml              - Workspace manifest
+├── CLAUDE.md               - This file (project documentation)
+│
+├── iota-core/              - Core types
+│   ├── lib.rs             - Module exports
+│   └── location.rs        - Position and Range types
+│
+├── iota-input/             - Input handling
+│   ├── lib.rs             - EditorKey, KeyCode, KeyModifiers
+│   └── (key parsing)
+│
+├── iota-editor/            - Core editor logic
+│   ├── lib.rs             - Module exports
+│   ├── editor.rs          - Editor orchestration, view/buffer management
+│   ├── buffer.rs          - Text buffer (Rope, file I/O, text operations)
+│   └── view.rs            - View layer (cursor, viewport, scroll state)
+│
+├── iota-protocol/          - Client/server protocol
+│   └── lib.rs             - Message types, bincode encoding, socket path resolution
+│
+├── iota-server/            - Server implementation
+│   ├── lib.rs             - Server, connection handling, message processing
+│   └── main.rs            - Server binary entrypoint
+│
+└── iota-terminal/          - Terminal frontend client
+    ├── lib.rs             - Terminal UI using ratatui, socket communication
+    └── main.rs            - Terminal client binary entrypoint
 ```
 
 ### Layer Responsibilities
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ Presentation Layer (terminal.rs)                    │
-│ - Rendering with ratatui                           │
-│ - Key event capture                                │
-│ - UI layout (line numbers, status line)            │
+│ Client Layer (iota-terminal)                        │
+│ - ratatui UI rendering                              │
+│ - Keyboard event capture                            │
+│ - Socket communication                              │
+│ - UI layout (line numbers, status line, messages)  │
 └───────────────────┬─────────────────────────────────┘
-                    │ EditorInput/EditorEvent
+                    │ Unix Socket
+                    │ Message::KeyPress ────────────▶
+                    │ Message::StateUpdate ◀─────────
 ┌───────────────────▼─────────────────────────────────┐
-│ Orchestration Layer (editor.rs)                     │
-│ - Command routing                                   │
+│ Server Layer (iota-server)                          │
+│ - Socket listener & connection management           │
+│ - Message encoding/decoding (bincode)               │
+│ - Owns Arc<RwLock<Editor>>                          │
+└───────────────────┬─────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────┐
+│ Orchestration Layer (iota-editor)                   │
+│ Editor:                                             │
+│ - Command routing (process_key)                     │
 │ - View ↔ Buffer mapping                            │
 │ - State management                                  │
+│ - Generate RenderData/EditorInfo                    │
 └──────┬───────────────────────┬──────────────────────┘
        │                       │
 ┌──────▼────────┐     ┌────────▼─────────┐
 │ View Layer    │     │ Data Layer       │
-│ (view.rs)     │     │ (buffer.rs)      │
+│ (iota-editor) │     │ (iota-editor)    │
 │               │     │                  │
 │ - cursor      │────▶│ - Rope text      │
 │ - scroll      │     │ - File I/O       │
 │ - viewport    │     │ - Text ops       │
 └───────────────┘     └──────────────────┘
+         │                     │
+         │                     │
+         └──────────┬──────────┘
+                    │
+┌───────────────────▼─────────────────────────────────┐
+│ Protocol Layer (iota-protocol)                      │
+│ - Message types (KeyPress, StateUpdate)             │
+│ - Position, RenderData, EditorInfo DTOs             │
+│ - Bincode encoding/decoding                         │
+│ - Socket path resolution                            │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## Development Notes
 
-### Current State (As of View Layer Refactor)
+### Current State (As of Client/Server Implementation)
 - The project uses Rust 2024 edition
+- **✅ Client/server architecture complete** - Full Unix socket communication with bincode protocol
 - **✅ View layer separation complete** - Proper Buffer/View/Editor architecture
 - **✅ Excellent test coverage** - 58 tests passing (50-64% test code in core modules)
 - **✅ Event-driven rendering** - Zero CPU idle, only redraws on changes, clean shutdown
-- **✅ Multiple views supported** - Foundation for window splitting and client/server
-- The client/server architecture is NOT yet implemented (but foundation is ready)
+- **✅ Multiple clients supported** - Multiple terminal clients can connect to same server
+- **✅ Environment-based socket configuration** - IOTA_SERVER_SOCKET, XDG_RUNTIME_DIR, /tmp fallback
+- **✅ Bincode message protocol** - Efficient binary serialization for client/server communication
 - Multiple views are exposed via Ctrl-N/D/H/L keybindings
 - Lua configuration support is planned but not implemented
 - SaveAs currently hardcoded to "untitled.txt" - needs proper file path input UI
 - No undo/redo functionality yet
 
-### Architectural Priorities (Post-View Layer)
+### Architectural Priorities (Post-Client/Server Split)
 
 **P0 - Critical Next Steps:**
 1. Buffer versioning for LSP compatibility (track edit version)
-2. Helper methods for view management (split_view, close_view)
+2. Per-client views (each client should have own ViewId)
 3. Configuration system (replace magic numbers like tab width)
 
 **P1 - High Priority:**
-4. Define RPC protocol for client/server split
-5. Extract editor into server component
-6. Add message queue infrastructure for async LSP responses
+4. Extend protocol for viewport size negotiation (client tells server terminal dimensions)
+5. Add horizontal scrolling support in protocol
+6. Helper methods for view management (split_view, close_view)
+7. Add message queue infrastructure for async LSP responses
 
 **P2 - Future Features:**
-7. Implement mode system (NormalMode, InsertMode, language modes)
-8. Add undo/redo with transaction support
-9. Tree-sitter integration for syntax highlighting
-10. LSP client integration
+8. Implement mode system (NormalMode, InsertMode, language modes)
+9. Add undo/redo with transaction support
+10. Tree-sitter integration for syntax highlighting
+11. LSP client integration
+12. File path input UI (for Save As)
+13. Additional frontends (GUI, web)
 
 ### Test Organization
-- `buffer.rs`: Comprehensive unit tests for all text operations
-- `editor.rs`: Integration tests for command execution and view/buffer management
-- `input.rs`: Parser tests for key sequences and modifiers
+- `iota-editor/buffer.rs`: Comprehensive unit tests for all text operations
+- `iota-editor/editor.rs`: Integration tests for command execution and view/buffer management
+- `iota-input`: Parser tests for key sequences and modifiers
 - Tests use public API exclusively - no internal state exposure
+- Client/server integration:
+  - Terminal 1: `cargo run -p iota-server`
+  - Terminal 2: `cargo run -p iota-terminal`
 
 ### Known Limitations
 - SaveAs has hardcoded filename (needs UI for path input)
@@ -359,4 +613,7 @@ bin/terminal.rs     - Terminal binary entrypoint
 - File I/O errors are shown but not categorized by severity
 - No syntax highlighting (waiting for tree-sitter integration)
 - No LSP support yet (needs async message infrastructure)
-- Single terminal view (multi-window splitting not yet implemented in terminal.rs)
+- Single terminal view per client (multi-window splitting not yet implemented)
+- All clients share the same Editor state (per-client views not yet implemented)
+- Fixed viewport height in server (24 lines) - needs viewport size negotiation protocol
+- No horizontal scrolling in terminal client

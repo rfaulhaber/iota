@@ -6,12 +6,18 @@ edition = "2024"
 [lib]
 path = "lib.rs"
 
+[[bin]]
+name = "iota-server"
+path = "main.rs"
+
 [dependencies]
 iota-editor = { path = "../iota-editor" }
 iota-input = { path = "../iota-input" }
 iota-protocol = { path = "../iota-protocol" }
 anyhow.workspace = true
 bincode.workspace = true
+env_logger.workspace = true
 interprocess.workspace = true
+log.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

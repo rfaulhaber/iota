@@ -336,17 +336,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iota"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "env_logger",
- "iota-editor",
- "iota-terminal",
- "tokio",
-]
-
-[[package]]
 name = "iota-core"
 version = "0.1.0"
 
@@ -386,10 +375,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
+ "env_logger",
  "interprocess",
  "iota-editor",
  "iota-input",
  "iota-protocol",
+ "log",
  "thiserror",
  "tokio",
 ]
@@ -399,9 +390,12 @@ name = "iota-terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
+ "env_logger",
+ "interprocess",
  "iota-core",
- "iota-editor",
  "iota-input",
+ "iota-protocol",
  "log",
  "ratatui",
  "tokio",
