@@ -269,6 +269,8 @@ impl Buffer {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -709,8 +711,11 @@ mod tests {
         let cursor = buffer.insert_string(0, "Test content");
 
         // Save to a temp file
-        let temp_path = "/tmp/iota_test_buffer.txt";
-        buffer.save_as(temp_path).await.expect("save_as failed");
+        let temp_path = Path::new("/tmp/iota_test_from_file.txt");
+        buffer
+            .save_as(temp_path.to_str().unwrap())
+            .await
+            .expect("save_as failed");
 
         assert!(!buffer.is_modified());
         assert_eq!(buffer.filepath(), Some(&PathBuf::from(temp_path)));
@@ -739,14 +744,14 @@ mod tests {
     #[tokio::test]
     async fn test_from_file() {
         // Create a temp file
-        let temp_path = "/tmp/iota_test_from_file.txt";
+        let temp_path = Path::new("/tmp/iota_test_from_file.txt");
         let test_content = "Line 1\nLine 2\nLine 3";
         tokio::fs::write(temp_path, test_content)
             .await
             .expect("write failed");
 
         // Load buffer from file
-        let buffer = Buffer::from_file(temp_path)
+        let buffer = Buffer::from_file(temp_path.to_str().unwrap())
             .await
             .expect("from_file failed");
 
