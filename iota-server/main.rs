@@ -6,6 +6,9 @@ use iota_server::Server;
 async fn main() -> Result<()> {
     env_logger::init();
 
+    let pid = std::process::id();
+    println!("{}", pid);
+
     // Get socket path from environment or use default
     let socket_path = get_socket_path();
 

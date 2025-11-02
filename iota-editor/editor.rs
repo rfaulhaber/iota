@@ -171,6 +171,10 @@ impl Editor {
                 events.push(EditorEvent::Shutdown);
                 return events;
             }
+            (KeyCode::Char('r'), m) if m.ctrl && !m.alt && !m.meta => {
+                events.push(EditorEvent::Redraw);
+                return events;
+            }
 
             // File operations
             (KeyCode::Char('s'), m) if m.ctrl && !m.alt && !m.meta => Some(EditorInput::Save),

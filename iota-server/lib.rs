@@ -143,10 +143,52 @@ async fn handle_client(mut conn: Stream, editor: Arc<RwLock<Editor>>) -> anyhow:
                     info,
                 }
             }
-            Message::StateUpdate { .. } => {
-                // Clients shouldn't send StateUpdate messages
-                continue;
+            Message::ClientStart => {
+                // Get current view for viewport calculations
+                let editor = editor.read().await;
+                let view = editor
+                    .get_current_view()
+                    .ok_or_else(|| anyhow::anyhow!("No current view"))?;
+
+                // For now, use a fixed viewport size - client will send actual size later
+                let viewport_height = 24;
+                let viewport_start = view.scroll_line();
+
+                // Get render data and info
+                let render_data_internal = editor.get_render_data(viewport_start, viewport_height);
+                let info_internal = editor.get_info();
+
+                // Convert to protocol types
+                let render_data = RenderData {
+                    lines: render_data_internal.lines,
+                    cursor: Position {
+                        line: render_data_internal.cursor.line,
+                        column: render_data_internal.cursor.column,
+                    },
+                    viewport_start: render_data_internal.viewport_start,
+                    viewport_height: render_data_internal.viewport_height,
+                };
+
+                let info = EditorInfo {
+                    cursor: Position {
+                        line: info_internal.cursor.line,
+                        column: info_internal.cursor.column,
+                    },
+                    filepath: info_internal.filepath,
+                    name: info_internal.name,
+                    modified: info_internal.modified,
+                    line_count: info_internal.line_count,
+                    char_count: info_internal.char_count,
+                };
+
+                Message::StateUpdate {
+                    events: vec![],
+                    render_data,
+                    info,
+                }
             }
+            Message::ServerStatusCheck => Message::ServerStatusOk,
+            _ => continue,
         };
 
         // Send response

@@ -55,6 +55,9 @@ pub enum Message {
         render_data: RenderData,
         info: EditorInfo,
     },
+    ClientStart,
+    ServerStatusCheck,
+    ServerStatusOk,
 }
 
 impl Message {

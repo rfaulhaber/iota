@@ -1,6 +1,27 @@
+[package]
+name = "iota"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[[bin]]
+name = "iota"
+path = "main.rs"
+
+[dependencies]
+tokio.workspace = true
+env_logger.workspace = true
+log.workspace = true
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+iota-protocol = { path = "./iota-protocol" }
+iota-server = { path = "./iota-server" }
+
 [workspace]
-members = ["iota-core", "iota-editor", "iota-input", "iota-protocol", "iota-server", "iota-terminal"]
-resolver = "2"
+members = ["iota-core", "iota-editor", "iota-input", "iota-protocol", "iota-server", "iota-terminal", "."]
+resolver = "3"
 
 [workspace.dependencies]
 anyhow = "1"

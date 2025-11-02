@@ -1,18 +1,18 @@
 use anyhow::Result;
 use interprocess::local_socket::{
-    tokio::{prelude::*, Stream},
     GenericNamespaced,
+    tokio::{Stream, prelude::*},
 };
 use iota_protocol::{EditorEvent, EditorInfo, Message, RenderData};
 use log::info;
 use ratatui::layout;
 use ratatui::{
+    Frame,
     crossterm::event::{self, Event, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 use std::path::PathBuf;
 use tokio::{
@@ -75,32 +75,24 @@ impl Terminal {
             .to_ns_name::<GenericNamespaced>()?;
 
         info!("Connecting to server at: {:?}", socket_path);
-        let conn = Stream::connect(socket_name).await?;
+        let mut conn = Stream::connect(socket_name).await?;
         info!("Connected to server");
 
-        // Initialize with empty state - will be updated on first message
-        let render_data = RenderData {
-            lines: vec![],
-            cursor: iota_protocol::Position { line: 0, column: 0 },
-            viewport_start: 0,
-            viewport_height: 0,
-        };
-
-        let info = EditorInfo {
-            cursor: iota_protocol::Position { line: 0, column: 0 },
-            filepath: None,
-            name: None,
-            modified: false,
-            line_count: 0,
-            char_count: 0,
-        };
-
-        Ok(Self {
-            conn,
-            render_data,
-            info,
-            message: None,
-        })
+        match send_message_to_server(&mut conn, Message::ClientStart).await? {
+            Message::StateUpdate {
+                events: _,
+                render_data,
+                info,
+            } => Ok(Self {
+                conn,
+                render_data,
+                info,
+                message: None,
+            }),
+            _ => unreachable!(
+                "Server should not respond with anything besides a state update on initialization"
+            ),
+        }
     }
 
     /// Send a key press to the server and receive the updated state
@@ -287,7 +279,10 @@ impl Terminal {
             self.info.cursor.line + 1,
             self.info.cursor.column + 1
         );
-        let stats = format!("{} lines, {} chars", self.info.line_count, self.info.char_count);
+        let stats = format!(
+            "{} lines, {} chars",
+            self.info.line_count, self.info.char_count
+        );
 
         let status_text = format!(
             "{} {} | {} | {}",
@@ -387,4 +382,22 @@ impl Terminal {
             Paragraph::new("")
         }
     }
+}
+
+async fn send_message_to_server(conn: &mut Stream, message: Message) -> Result<Message> {
+    conn.write_all(&message.encode()?).await?;
+
+    // Read response length
+    let mut len_buf = [0u8; 4];
+    conn.read_exact(&mut len_buf).await?;
+    let msg_len = u32::from_be_bytes(len_buf) as usize;
+
+    // Read response data
+    let mut msg_buf = vec![0u8; msg_len];
+    conn.read_exact(&mut msg_buf).await?;
+
+    // Decode response
+    let response = Message::decode(&msg_buf)?;
+
+    Ok(response)
 }
