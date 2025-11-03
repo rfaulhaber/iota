@@ -2,7 +2,7 @@
 
 ~iota~ is the working name of a new text editor. Born out of the desire to bring what's useful about Emacs into the 21st century.
 
-This is very much a work in progress!
+This is very much a toy editor and a work in progress!
 
 ~iota~'s overall goals include:
 - async first, unlike Emacs
