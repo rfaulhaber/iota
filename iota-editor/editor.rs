@@ -550,6 +550,14 @@ pub struct RenderData {
 mod tests {
     use super::*;
 
+    /// Helper function to create a cross-platform temp file path
+    fn temp_path(filename: &str) -> String {
+        std::env::temp_dir()
+            .join(filename)
+            .to_string_lossy()
+            .to_string()
+    }
+
     #[tokio::test]
     async fn test_new_editor() {
         let editor = Editor::new();
@@ -838,7 +846,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_as() {
         let mut editor = Editor::new();
-        let temp_path = "/tmp/iota_test_editor_save.txt";
+        let temp_path = temp_path("iota_test_editor_save.txt");
 
         editor
             .execute_command(EditorInput::InsertString("Test content".to_string()))
@@ -858,21 +866,21 @@ mod tests {
         assert_eq!(info.filepath, Some(temp_path.to_string()));
 
         // Verify file was written
-        let content = tokio::fs::read_to_string(temp_path)
+        let content = tokio::fs::read_to_string(&temp_path)
             .await
             .expect("read failed");
         assert_eq!(content, "Test content");
 
         // Cleanup
-        let _ = tokio::fs::remove_file(temp_path).await;
+        let _ = tokio::fs::remove_file(&temp_path).await;
     }
 
     #[tokio::test]
     async fn test_open_file() {
         // Create a temp file
-        let temp_path = "/tmp/iota_test_editor_open.txt";
+        let temp_path = temp_path("iota_test_editor_open.txt");
         let test_content = "File content\nLine 2";
-        tokio::fs::write(temp_path, test_content)
+        tokio::fs::write(&temp_path, test_content)
             .await
             .expect("write failed");
 
@@ -880,7 +888,7 @@ mod tests {
 
         // Open the file
         let events = editor
-            .execute_command(EditorInput::OpenFile(temp_path.to_string()))
+            .execute_command(EditorInput::OpenFile(temp_path.clone()))
             .await;
 
         // Should generate info and redraw events
@@ -896,11 +904,11 @@ mod tests {
         assert_eq!(view.lines[1], "Line 2");
 
         let info = editor.get_info();
-        assert_eq!(info.filepath, Some(temp_path.to_string()));
+        assert_eq!(info.filepath, Some(temp_path.clone()));
         assert!(!info.modified);
 
         // Cleanup
-        let _ = tokio::fs::remove_file(temp_path).await;
+        let _ = tokio::fs::remove_file(&temp_path).await;
     }
 
     #[tokio::test]
@@ -921,26 +929,26 @@ mod tests {
     #[tokio::test]
     async fn test_with_file() {
         // Create a temp file
-        let temp_path = "/tmp/iota_test_editor_with_file.txt";
+        let temp_path = temp_path("iota_test_editor_with_file.txt");
         let test_content = "Initial content";
-        tokio::fs::write(temp_path, test_content)
+        tokio::fs::write(&temp_path, test_content)
             .await
             .expect("write failed");
 
         // Create editor with file
-        let editor = Editor::with_file(temp_path)
+        let editor = Editor::with_file(&temp_path)
             .await
             .expect("with_file failed");
 
         // Should have one buffer with the file loaded
         assert_eq!(editor.buffers.len(), 1);
         let info = editor.get_info();
-        assert_eq!(info.filepath, Some(temp_path.to_string()));
+        assert_eq!(info.filepath, Some(temp_path.clone()));
         assert!(!info.modified);
         assert_eq!(info.char_count, 15);
 
         // Cleanup
-        let _ = tokio::fs::remove_file(temp_path).await;
+        let _ = tokio::fs::remove_file(&temp_path).await;
     }
 
     #[tokio::test]

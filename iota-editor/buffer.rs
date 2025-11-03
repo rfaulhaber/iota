@@ -711,7 +711,7 @@ mod tests {
         let cursor = buffer.insert_string(0, "Test content");
 
         // Save to a temp file
-        let temp_path = make_tmp_file_path("iota_test_from_file.txt");
+        let temp_path = make_tmp_file_path("iota_test_save_as_and_save.txt");
         buffer
             .save_as(temp_path.to_str().unwrap())
             .await
