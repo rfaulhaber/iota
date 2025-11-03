@@ -711,7 +711,7 @@ mod tests {
         let cursor = buffer.insert_string(0, "Test content");
 
         // Save to a temp file
-        let temp_path = make_tmp_file_path("/tmp/iota_test_from_file.txt");
+        let temp_path = make_tmp_file_path("iota_test_from_file.txt");
         buffer
             .save_as(temp_path.to_str().unwrap())
             .await
@@ -744,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn test_from_file() {
         // Create a temp file
-        let temp_path = make_tmp_file_path("/tmp/iota_test_from_file.txt");
+        let temp_path = make_tmp_file_path("iota_test_from_file.txt");
         let test_content = "Line 1\nLine 2\nLine 3";
         tokio::fs::write(temp_path.clone(), test_content)
             .await

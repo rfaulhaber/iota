@@ -48,4 +48,4 @@ jobs:
       run: cargo build --workspace --verbose
 
     - name: Run tests with nextest
-      run: cargo nextest run --workspace --verbose
+      run: cargo nextest run --workspace --verbose --no-fail-fast
