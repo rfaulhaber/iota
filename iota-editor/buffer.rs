@@ -711,17 +711,17 @@ mod tests {
         let cursor = buffer.insert_string(0, "Test content");
 
         // Save to a temp file
-        let temp_path = Path::new("/tmp/iota_test_from_file.txt");
+        let temp_path = make_tmp_file_path("/tmp/iota_test_from_file.txt");
         buffer
             .save_as(temp_path.to_str().unwrap())
             .await
             .expect("save_as failed");
 
         assert!(!buffer.is_modified());
-        assert_eq!(buffer.filepath(), Some(&PathBuf::from(temp_path)));
+        assert_eq!(buffer.filepath(), Some(&PathBuf::from(temp_path.clone())));
 
         // Verify file was written
-        let content = tokio::fs::read_to_string(temp_path)
+        let content = tokio::fs::read_to_string(temp_path.clone())
             .await
             .expect("read failed");
         assert_eq!(content, "Test content");
@@ -732,21 +732,21 @@ mod tests {
         buffer.save().await.expect("save failed");
         assert!(!buffer.is_modified());
 
-        let content = tokio::fs::read_to_string(temp_path)
+        let content = tokio::fs::read_to_string(temp_path.clone())
             .await
             .expect("read failed");
         assert_eq!(content, "Test content\nMore content");
 
         // Cleanup
-        let _ = tokio::fs::remove_file(temp_path).await;
+        let _ = tokio::fs::remove_file(temp_path.clone()).await;
     }
 
     #[tokio::test]
     async fn test_from_file() {
         // Create a temp file
-        let temp_path = Path::new("/tmp/iota_test_from_file.txt");
+        let temp_path = make_tmp_file_path("/tmp/iota_test_from_file.txt");
         let test_content = "Line 1\nLine 2\nLine 3";
-        tokio::fs::write(temp_path, test_content)
+        tokio::fs::write(temp_path.clone(), test_content)
             .await
             .expect("write failed");
 
@@ -757,12 +757,19 @@ mod tests {
 
         assert_eq!(buffer.to_string(), test_content);
         assert!(!buffer.is_modified());
-        assert_eq!(buffer.filepath(), Some(&PathBuf::from(temp_path)));
+        assert_eq!(buffer.filepath(), Some(&PathBuf::from(temp_path.clone())));
 
         let (lines, _) = buffer.stats();
         assert_eq!(lines, 3);
 
         // Cleanup
-        let _ = tokio::fs::remove_file(temp_path).await;
+        let _ = tokio::fs::remove_file(temp_path.clone()).await;
+    }
+
+    fn make_tmp_file_path(file_name: &str) -> PathBuf {
+        let mut tmp_dir = std::env::temp_dir();
+        tmp_dir.push(file_name);
+
+        return tmp_dir;
     }
 }
