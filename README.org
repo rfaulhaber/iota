@@ -17,3 +17,5 @@ This is very much a toy editor and a work in progress!
 - client/server separation. I plan to build and support several first-class implementations but it should be designed such that a user could build their own front-end implementation
 - eventually, collaborative editing
 - a first-class native magit-like framework
+
+This repo will no longer be updated! Development has moved to [[https://git.sr.ht/~yarn/iota][SourceHut]]!
